@@ -37,8 +37,15 @@ class Target:
         # 위험구역까지 최소 거리
         self.d_Z_kt = float('inf')
 
-    def step(self, dt):
+    def step(self, dt, Q=None):
+        """식 (1): S_{k(t+1)} = F * S_kt + w_kt, w_kt ~ N(0, Q)"""
+        # 결정론적 등속 이동
         self.pos += self.velocity * dt
+        # 식 (1)의 process noise w_kt 적용
+        if Q is not None:
+            w_kt = np.random.multivariate_normal(np.zeros(4), Q).astype(np.float32)
+            self.pos += w_kt[:2]
+            self.velocity += w_kt[2:]
 
 
 class UAV:
@@ -60,6 +67,7 @@ class UAV:
         
         self.is_detected_per_target = {}  # {target_id: alpha_ukt}
         self.last_e_tot = 0.0
+        self.last_R_c = 0.0   # 식 (28g) 통신률 제약 검사용
         
         # 로컬 EKF용 사후 추정 (BS로 전송)
         self.local_estimates = {}  # {target_id: (S_t|t, P_t|t)}
@@ -99,7 +107,11 @@ class UAV:
         return snr_sen, e_sen
 
     def get_comm_model(self, bs_pos, dt, alpha_ukt):
-        """식 (15)~(18): 통신 모델 및 에너지"""
+        """식 (15)~(18): 통신 모델 및 에너지
+        주: 식 (16) 분모는 d_u(t)로 표기되나, free-space path loss는 송수신단
+            간 실제 거리(3D)를 쓰는 것이 물리적으로 정확. d_2D=0일 때
+            (UAV가 BS 바로 위) 채널이득이 발산하는 것을 방지하기 위해 3D 사용.
+        """
         d_ut_2d = np.linalg.norm(self.pos - bs_pos)
         d_ut_3d = math.sqrt(d_ut_2d**2 + self.H**2)
         
@@ -157,6 +169,7 @@ class UAVTrackingEnv(gym.Env):
         self.lam1 = 1.0
         self.lam2 = 50.0
         self.lam3 = 100.0
+        self.lam4 = 10.0      # 식 (28g) 통신률 제약 위반 페널티
         
         # EKF 사전계산
         self.sigma_w_sq = 5.0
@@ -227,6 +240,10 @@ class UAVTrackingEnv(gym.Env):
             UAV(i, [np.random.uniform(-50, 50), np.random.uniform(-50, 50)], altitude=100.0)
             for i in range(self.num_uavs)
         ]
+        # 명시적 초기화 (이전 에피소드 잔재 방지)
+        for uav in self.uavs:
+            uav.is_detected_per_target = {}
+            uav.local_estimates = {}
         self.targets = [
             Target(i,
                    [np.random.uniform(self.map_min, self.map_max),
@@ -348,9 +365,9 @@ class UAVTrackingEnv(gym.Env):
     def step(self, actions):
         self.time_slot += 1
         
-        # 1) 타겟 이동 (식 1)
+        # 1) 타겟 이동 (식 1) - process noise 포함
         for target in self.targets:
-            target.step(self.dt)
+            target.step(self.dt, Q=self.Q)
         
         # 2) UAV 이동 (식 28d)
         for i, uav in enumerate(self.uavs):
@@ -392,6 +409,7 @@ class UAVTrackingEnv(gym.Env):
             uav.is_detected_per_target[t_idx] = alpha_ukt
             
             e_comm, R_c_ut = uav.get_comm_model(self.bs_pos, self.dt, alpha_ukt)
+            uav.last_R_c = R_c_ut    # 식 (28g) 통신률 제약 검사용
             e_move = uav.get_mobility_energy(self.dt)
             
             e_tot = e_sen + e_comm + e_move
@@ -508,12 +526,13 @@ class UAVTrackingEnv(gym.Env):
         total_energy = sum(u.last_e_tot for u in self.uavs)
         r_energy = -total_energy
         
+        # 식 (32) tracking term: 모든 UAV (할당 무관)에 대한 곱
+        # 논문의 prod_{u in U} (1 - alpha_ukt)는 "어떤 UAV도 감지 못함"을 표현
         r_tracking = 0.0
         for t_idx, target in enumerate(self.targets):
             prod_loss = 1
-            for u_idx, uav in enumerate(self.uavs):
-                if self.assignment.get(u_idx) == t_idx:
-                    prod_loss *= (1 - uav.is_detected_per_target.get(t_idx, 0))
+            for uav in self.uavs:
+                prod_loss *= (1 - uav.is_detected_per_target.get(t_idx, 0))
             r_tracking -= target.W_kt * (
                 self.lam1 * target.F_kt + self.lam2 * prod_loss
             )
@@ -531,4 +550,12 @@ class UAVTrackingEnv(gym.Env):
                 C_t += 1
         r_collision = -self.lam3 * C_t
         
-        return float(r_energy + r_tracking + r_collision)
+        # 식 (28g) 통신률 제약 위반 페널티
+        r_comm = 0.0
+        for u in self.uavs:
+            # alpha=1인 UAV에 한해 R_c >= R_c_th 요구
+            for t_idx, alpha in u.is_detected_per_target.items():
+                if alpha == 1 and u.last_R_c < self.R_c_threshold:
+                    r_comm -= self.lam4 * (self.R_c_threshold - u.last_R_c) / self.R_c_threshold
+        
+        return float(r_energy + r_tracking + r_collision + r_comm)
