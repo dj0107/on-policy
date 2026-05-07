@@ -3,333 +3,532 @@ import math
 import gymnasium as gym
 from gymnasium import spaces
 
+# ============================================================================
+# (12) 버전 기준 - Dec-POMDP, AAI 출력: epsilon_kt, W_kt, p_ut
+# (8) → (12) 주요 변경:
+#   - MDP → Dec-POMDP (global state s_t + local obs o_u,t 분리)
+#   - AAI 출력: M_t (할당) → eps_kt(threshold), W_kt(weight), p_ut(power)
+#   - 보상: UAV별 개별 r_u(t) → global team reward r_t (식 32)
+#   - 측정모델: 절대좌표 → 상대좌표 (x_k - x_u, y_k - y_u)
+#   - 운영절차 8단계 → 7단계 (AAI가 직접 파라미터 결정)
+# ============================================================================
+
+
 class Target:
-    """이동하는 타겟의 상태와 EKF 추적을 위한 정보 행렬(J) 관리 (EKF는 아직 간소화함)"""
+    """타겟 상태, EKF용 fused estimate, BFIM 관리"""
     def __init__(self, target_id, initial_pos, initial_velocity):
         self.id = target_id
-        self.pos = np.array(initial_pos, dtype=np.float32)
+        self.pos = np.array(initial_pos, dtype=np.float32)        # 실제 위치 (시뮬용 ground truth)
         self.velocity = np.array(initial_velocity, dtype=np.float32)
-        self.est_state = np.concatenate([self.pos, self.velocity])
-        self.J_matrix = np.eye(4, dtype=np.float32) * 0.1 # BFIM 계산용
-        self.F_ukt = 0.0  
+        
+        # BS에서 융합된 글로벌 추정 상태 (식 23, 24)
+        self.S_global = np.concatenate([self.pos, self.velocity])  # \tilde{S}_k,t (4,)
+        self.P_global = np.eye(4, dtype=np.float32) * 1.0          # \tilde{P}_k,t (4,4)
+        
+        # BFIM (식 26) 및 PCRLB 추적 정확도 (식 27)
+        self.J_matrix = np.eye(4, dtype=np.float32) * 0.1
+        self.F_kt = 0.0  # tr(Lambda * J^-1 * Lambda^T)
         self.measurement_info = np.zeros((4, 4), dtype=np.float32)
-    
+        
+        # AAI가 결정 (식 23)
+        self.epsilon_kt = 5.0   # tracking accuracy threshold
+        self.W_kt = 1.0         # priority weight
+        
+        # 위험구역까지 최소 거리
+        self.d_Z_kt = float('inf')
+
     def step(self, dt):
         self.pos += self.velocity * dt
 
+
 class UAV:
-    """행동 제어 및 에너지 소비, AAI 변수 관리"""
-    def __init__(self, uav_id, initial_pos, altitude, max_speed=20.0, max_energy=100000.0):
+    """UAV 행동 제어, 에너지 관리. AAI가 송신전력 p_ut를 외부에서 주입"""
+    def __init__(self, uav_id, initial_pos, altitude, max_speed=10.0, max_energy=100000.0):
         self.id = uav_id
         self.pos = np.array(initial_pos, dtype=np.float32)
-        self.velocity = np.array([0.0, 0.0], dtype=np.float32) 
-        self.H = altitude 
-        self.v_max = max_speed 
-        self.energy = max_energy 
-        self.is_detected = False
+        self.velocity = np.array([0.0, 0.0], dtype=np.float32)
+        self.H = altitude
+        self.v_max = max_speed   # 논문 Table: v_max = 10 m/s
+        self.energy = max_energy
         
-        # AAI 할당 변수들
-        self.assigned_target_id = None 
-        self.W_t = 1.0  # 추적 우선순위 가중치
-        self.mu = 0.5   # ISAC 센싱/통신 시간 비율
+        # AAI 동적 할당 변수 (식 23)
+        self.p_ut = 15.0        # 송신 전력 (W) - AAI가 결정
+        
+        # 시간 슬롯 분할: tau_s + tau_c = delta
+        # (12)에서는 mu가 AAI 출력에서 빠짐 → 일단 0.5로 고정
+        self.tau_s_ratio = 0.5
+        
+        self.is_detected_per_target = {}  # {target_id: alpha_ukt}
         self.last_e_tot = 0.0
         
-        # --- ISAC 및 물리 모델 상수 ---
-        self.p = 0.1 
+        # 로컬 EKF용 사후 추정 (BS로 전송)
+        self.local_estimates = {}  # {target_id: (S_t|t, P_t|t)}
+        
+        # --- 물리 상수 (논문 Table) ---
         self.f_c = 2.4e9
-        self.lam = 3e8 / self.f_c 
-        self.G_t, self.G_r, self.sigma, self.N0 = 1, 1, 1.0, 1e-10 
-        self.c1, self.c2, self.eta_LoS, self.eta_NLoS = 9.6, 0.28, 1.0, 20.0 
-        self.B_b = 1e6 
-        self.P0, self.P1 = 79.856, 88.628 
-        self.u_up, self.v0 = 120.0, 4.03
-        self.d0, self.rho, self.s0, self.A = 0.6, 1.225, 0.05, 0.5
+        self.lam = 3e8 / self.f_c
+        self.G_t = 100.0       # 20 dBi
+        self.G_r = 1000.0      # 30 dBi
+        self.sigma = 1.0       # RCS
+        self.N0 = 1e-14        # -110 dBmW
+        self.c1, self.c2 = 11.9, 0.13          # urban
+        self.eta_LoS, self.eta_NLoS = 1.0, 100.0
+        self.B_b = 1e6
+        
+        # 추진 에너지 상수 (논문 Table)
+        self.P0, self.P1 = 3.4, 20.0
+        self.u_tip, self.v0 = 60.0, 5.4
+        self.d0, self.rho, self.s0, self.A = 0.3, 1.225, 0.03, 0.28
 
     def apply_action(self, action, dt):
-        desired_velocity = np.array(action, dtype=np.float32) * self.v_max
-        v_norm = np.linalg.norm(desired_velocity)
-        if v_norm > self.v_max:
-            desired_velocity = (desired_velocity / v_norm) * self.v_max
-        self.velocity = desired_velocity
-        self.pos += self.velocity * dt
+        """식 (28d): ||q_t - q_{t-1}|| <= v_max * delta"""
+        delta_q = np.array(action, dtype=np.float32) * self.v_max * dt
+        delta_norm = np.linalg.norm(delta_q)
+        if delta_norm > self.v_max * dt:
+            delta_q = (delta_q / delta_norm) * self.v_max * dt
+        self.velocity = delta_q / dt if dt > 0 else np.zeros(2)
+        self.pos += delta_q
 
     def get_sensing_model(self, target_pos, dt):
+        """식 (6): 레이더 SNR 및 (7): 센싱 에너지"""
         d_uk = math.sqrt(np.sum((self.pos - target_pos)**2) + self.H**2)
-        h_sen = (self.G_t * self.G_r * (self.lam**2) * self.sigma) / ((4 * math.pi)**3 * (d_uk**4)) # 각종 값들 하나로 압축
-        
-        # 센싱 시간(mu * dt)을 분자에 곱하여 SNR 계산
-        tau_s = self.mu * dt
-        snr_sen = (self.p * h_sen * tau_s) / self.N0 # G, 람다, d등은 h_sen에 포함 (6)
-        
-        e_sen = self.p * self.mu * dt # (7)
+        tau_s = self.tau_s_ratio * dt
+        snr_sen = (self.p_ut * self.G_t * self.G_r * (self.lam**2) * self.sigma * tau_s) \
+                  / (self.N0 * (4 * math.pi)**3 * (d_uk**4))
+        e_sen = self.p_ut * tau_s
         return snr_sen, e_sen
 
-    def get_comm_model(self, bs_pos, dt):
-        # 1. 수평 거리(2D) 계산
-        d_ut_2d = np.linalg.norm(self.pos - bs_pos) 
+    def get_comm_model(self, bs_pos, dt, alpha_ukt):
+        """식 (15)~(18): 통신 모델 및 에너지"""
+        d_ut_2d = np.linalg.norm(self.pos - bs_pos)
+        d_ut_3d = math.sqrt(d_ut_2d**2 + self.H**2)
         
-        # 2. 채널 이득 계산
         theta_ut = math.atan(self.H / d_ut_2d) if d_ut_2d > 0 else math.pi/2
         p_los = 1 / (1 + self.c1 * math.exp(-self.c2 * (math.degrees(theta_ut) - self.c1)))
+        p_nlos = 1 - p_los
         
-        # eq (16)~(17). self.eta_(N)LoS 는 상수, 아직은 안쓰임
-        # h_c = ((p_los * self.eta_LoS + (1-p_los) * self.eta_NLoS) * (self.lam**2)) / ((4 * math.pi * d_ut_2d)**2 + 1e-9) 
-        # Rcut 아직 계산 x
-
-        # 3. 통신 에너지 계산 (18) 
-        # p는 송신 전력, (1-mu)*dt는 통신 시간(tau_c)
-        # 아직은 이 위로 안쓰임
-        e_comm = self.p * (1 - self.mu) * dt
+        h_c = ((p_los * self.eta_LoS + p_nlos * self.eta_NLoS) * (self.lam**2)) \
+              / ((4 * math.pi * d_ut_3d)**2 + 1e-12)
         
-        return e_comm
+        snr_comm = (self.p_ut * h_c) / self.N0
+        tau_c = (1 - self.tau_s_ratio) * dt
+        R_c_ut = alpha_ukt * tau_c * self.B_b * math.log2(1 + snr_comm)
+        
+        e_comm = self.p_ut * tau_c
+        return e_comm, R_c_ut
 
     def get_mobility_energy(self, dt):
-        # F의 (19) 윗 부분들 복잡해서 3항으로 나눠서 합침 
+        """식 (19): 이동 에너지"""
         v_norm = np.linalg.norm(self.velocity)
-        if v_norm == 0: return (self.P0 + self.P1) * dt 
-        term1 = self.P0 * (1 + (3 * v_norm**2) / (self.u_up**2))
+        if v_norm == 0:
+            return (self.P0 + self.P1) * dt
+        term1 = self.P0 * (1 + (3 * v_norm**2) / (self.u_tip**2))
         inner_sqrt = math.sqrt(1 + (v_norm**4) / (4 * self.v0**4))
-        term2 = self.P1 * math.sqrt(inner_sqrt - (v_norm**2) / (2 * self.v0**2))
-        term3 = 0.5 * self.d0 * self.rho * self.s0 * self.A * (v_norm**3) 
+        term2 = self.P1 * math.sqrt(max(inner_sqrt - (v_norm**2) / (2 * self.v0**2), 0))
+        term3 = 0.5 * self.d0 * self.rho * self.s0 * self.A * (v_norm**3)
         return (term1 + term2 + term3) * dt
 
 
 class UAVTrackingEnv(gym.Env):
-    def __init__(self, num_uavs=5, num_targets=2, dt=0.5):
+    """
+    Dec-POMDP 기반 UAV swarm MTT 환경 (논문 (12) 기준)
+    - global state s_t (식 29): centralized critic 입력
+    - local obs o_u,t (식 30): decentralized actor 입력
+    - global team reward r_t (식 32)
+    """
+    
+    def __init__(self, num_uavs=5, num_targets=2, dt=1.0):
         super(UAVTrackingEnv, self).__init__()
         self.num_uavs = num_uavs
         self.num_targets = num_targets
-        self.dt = dt
+        self.dt = dt          # 논문 Table: delta = 1s
         self.max_steps = 100
         
-        # 위험 구역(Critical Zones) 임시로 하드코딩
-        self.critical_zones = [np.array([200.0, 200.0]), np.array([-150.0, 300.0])] 
+        # 위험구역 (Z)
+        self.critical_zones = [np.array([200.0, 200.0]), np.array([-150.0, 300.0])]
         
+        # 임계값 (논문 Table)
+        self.snr_threshold = 20.0          # gamma_sen_th = 13 dB
+        self.R_c_threshold = 1.218e6       # R_c_th
+        self.d_min = 5.0                   # 식 (28e)
+        self.map_min, self.map_max = -500.0, 500.0  # 식 (28b)(28c)
+        
+        # 보상 가중치 (식 32)
+        self.lam1 = 1.0
+        self.lam2 = 50.0
+        self.lam3 = 100.0
+        
+        # EKF 사전계산
+        self.sigma_w_sq = 5.0
+        self.sigma_r0_sq = 10.0
+        self.sigma_theta0_sq = 1e-4
+        self._precompute_ekf_matrices()
+        
+        # 더미 초기화 (obs_dim 계산용)
         self.uavs = [UAV(i, [0, 0], altitude=100.0) for i in range(self.num_uavs)]
         self.targets = [Target(i, [0, 0], [0, 0]) for i in range(self.num_targets)]
+        self.assignment = {u: 0 for u in range(self.num_uavs)}
         
-        # Observation 차원 계산 
-        dummy_local_obs, _ = self._get_obs() # 최초에 1회 관측해보기
-        obs_dim = len(dummy_local_obs[0]) # 9차원
-        share_obs_dim = obs_dim * self.num_uavs # 9 x uav수 차원
+        dummy_local, dummy_global = self._get_obs()
+        local_dim = len(dummy_local[0])
+        global_dim = len(dummy_global)
         
-        # 각 uav의 행동
-        self.action_space = [spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32) for _ in range(self.num_uavs)]
-        # 각 uav의 관측
-        self.observation_space = [spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32) for _ in range(self.num_uavs)] # 
-        # 중앙의 관측(gymnasium 특성상 에이전트 수만큼의 리스트로 줘야 해서 for문 여기도 붙음)
-        self.share_observation_space = [spaces.Box(low=-np.inf, high=np.inf, shape=(share_obs_dim,), dtype=np.float32) for _ in range(self.num_uavs)] # uav들 관측 공간들 다 붙인거
+        self.action_space = [
+            spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+            for _ in range(self.num_uavs)
+        ]
+        self.observation_space = [
+            spaces.Box(low=-np.inf, high=np.inf, shape=(local_dim,), dtype=np.float32)
+            for _ in range(self.num_uavs)
+        ]
+        # share_obs: 모든 에이전트가 동일 global state 공유 (CTDE)
+        self.share_observation_space = [
+            spaces.Box(low=-np.inf, high=np.inf, shape=(global_dim,), dtype=np.float32)
+            for _ in range(self.num_uavs)
+        ]
+        
+        self.reset()
 
-        self.reset() # 초기화
+    def _precompute_ekf_matrices(self):
+        dt = self.dt
+        # 식 (2)
+        self.F_mat = np.array([
+            [1, 0, dt, 0],
+            [0, 1, 0,  dt],
+            [0, 0, 1,  0],
+            [0, 0, 0,  1]
+        ], dtype=np.float32)
+        self.F_inv = np.linalg.inv(self.F_mat)
+        
+        # 식 (3)
+        q11, q13, q33 = dt**4/4, dt**3/2, dt**2
+        self.Q = np.array([
+            [q11, 0,   q13, 0],
+            [0,   q11, 0,   q13],
+            [q13, 0,   q33, 0],
+            [0,   q13, 0,   q33]
+        ], dtype=np.float32) * self.sigma_w_sq
+        self.Q += np.eye(4) * 1e-6
+        self.Q_inv = np.linalg.inv(self.Q)
+        
+        # 식 (27)
+        self.Lambda = np.diag([1.0, 1.0, dt, dt]).astype(np.float32)
 
     def seed(self, seed=None):
-        # 시드 생성
         np.random.seed(seed if seed is not None else 1)
 
     def reset(self, seed=None, options=None):
-        # 환경 초기화
-        if seed is not None: self.seed(seed)
-        self.time_slot = 0 # 처음이라서 0
-        self.bs_pos = np.array([0.0, 0.0], dtype=np.float32) #중앙 좌표로
-        self.snr_threshold = 10.0 # 탐지 성공 기준
+        if seed is not None:
+            self.seed(seed)
+        self.time_slot = 0
+        self.bs_pos = np.array([0.0, 0.0], dtype=np.float32)
         
-        map_boundary = 500.0 # -X~X라서 맵 크기는 1000x1000 
-        # uav랑 타겟 무작위로 배치 (추후 조정)
-        self.uavs = [UAV(i, [np.random.uniform(-50, 50), np.random.uniform(-50, 50)], altitude=100.0) for i in range(self.num_uavs)]
-        self.targets = [Target(i, 
-                               [np.random.uniform(-map_boundary, map_boundary), np.random.uniform(-map_boundary, map_boundary)], 
-                               [np.random.uniform(1, 3), np.random.uniform(1, 3)]) 
-                        for i in range(self.num_targets)]
+        self.uavs = [
+            UAV(i, [np.random.uniform(-50, 50), np.random.uniform(-50, 50)], altitude=100.0)
+            for i in range(self.num_uavs)
+        ]
+        self.targets = [
+            Target(i,
+                   [np.random.uniform(self.map_min, self.map_max),
+                    np.random.uniform(self.map_min, self.map_max)],
+                   [np.random.uniform(1, 3), np.random.uniform(1, 3)])
+            for i in range(self.num_targets)
+        ]
         
-        self._run_aai_heuristic() # 초기에 AAI로 타겟 할당
-        local_obs, _ = self._get_obs() # 최초 관측
+        for target in self.targets:
+            target.d_Z_kt = min(np.linalg.norm(target.pos - cz) for cz in self.critical_zones)
+        
+        self._run_aai_heuristic()
+        
+        local_obs, _ = self._get_obs()
         return np.array(local_obs, dtype=np.float32)
 
+    # ========================================================================
+    # AAI Framework (논문 IV-A)
+    # 출력: epsilon_kt, W_kt, p_ut
+    # ========================================================================
     def _run_aai_heuristic(self):
         """
-        AAI Framework: 타겟 할당(A_t), ISAC 비율(mu_t), 우선순위(W_t) 동적 결정
-        LLM 도입을 아직 안하고 임시로 넣은 naive에 가까운 형태라 제거 후 교체 예정
+        AAI Heuristic (LLM 도입 전 임시 구현)
+        - 식 (23): [{eps_kt}, {W_kt}, {p_ut}] = f_AAI(Phi_t)
+        - Phi_t (식 24): {tilde_S, tilde_P, d_Z_kt}_k, {E_ut}_u
         """
-        unassigned_uavs = list(range(self.num_uavs))
+        # ----- Perception: 글로벌 텔레메트리 -----
+        for target in self.targets:
+            target.d_Z_kt = min(
+                np.linalg.norm(target.pos - cz) for cz in self.critical_zones
+            )
         
-        # 1. Coverage 보장을 위한 기본 1:1 매핑
-        for t_idx, target in enumerate(self.targets):
-            if not unassigned_uavs: break
-            best_uav = min(unassigned_uavs, key=lambda u_idx: np.linalg.norm(self.uavs[u_idx].pos - target.pos))
-            self.uavs[best_uav].assigned_target_id = t_idx
-            unassigned_uavs.remove(best_uav)
-            
-        # 2. 남은 UAV 중복 할당 (협력 추적)
-        for u_idx in unassigned_uavs:
-            best_target = min(range(self.num_targets), key=lambda t_idx: np.linalg.norm(self.uavs[u_idx].pos - self.targets[t_idx].pos))
-            self.uavs[u_idx].assigned_target_id = best_target
-
-        # 3. W_t 및 mu_t 조절
-        for uav in self.uavs:
-            target = self.targets[uav.assigned_target_id]
-            d_kt_Z = min([np.linalg.norm(target.pos - cz) for cz in self.critical_zones])
-            
-            # W_t: Critical Zone 접근 시 가중치 3배
-            uav.W_t = 3.0 if d_kt_Z < 100.0 else 1.0
-                
-            # mu_t: 거리에 따른 ISAC 센싱/통신 비율 조절
-            dist_to_target = np.linalg.norm(uav.pos - target.pos)
-            if dist_to_target > 150.0:
-                uav.mu = 0.7  # 멀면 센싱 집중
-            elif dist_to_target < 50.0:
-                uav.mu = 0.3  # 가까우면 통신 집중
+        # ----- Reasoning: 파라미터 결정 -----
+        for target in self.targets:
+            # W_kt: 위험구역 접근 시 가중치 ↑
+            if target.d_Z_kt < 100.0:
+                target.W_kt = 3.0
+            elif target.d_Z_kt < 200.0:
+                target.W_kt = 2.0
             else:
-                uav.mu = 0.5
+                target.W_kt = 1.0
+            
+            # eps_kt: 위험구역 접근 시 임계값 ↓ (정확도 강화)
+            if target.d_Z_kt < 100.0:
+                target.epsilon_kt = 2.0
+            else:
+                target.epsilon_kt = 5.0
+        
+        # 보조 변수: 1:1 mapping (운영상 필요)
+        unassigned = list(range(self.num_uavs))
+        self.assignment = {}
+        for t_idx, target in enumerate(self.targets):
+            if not unassigned:
+                break
+            best_uav = min(unassigned,
+                           key=lambda u: np.linalg.norm(self.uavs[u].pos - target.pos))
+            self.assignment[best_uav] = t_idx
+            unassigned.remove(best_uav)
+        for u_idx in unassigned:
+            best_t = min(range(self.num_targets),
+                         key=lambda t: np.linalg.norm(self.uavs[u_idx].pos - self.targets[t].pos))
+            self.assignment[u_idx] = best_t
+        
+        # p_ut: 거리/잔여에너지 기반 송신전력 조절
+        for u_idx, uav in enumerate(self.uavs):
+            target = self.targets[self.assignment[u_idx]]
+            dist = np.linalg.norm(uav.pos - target.pos)
+            if dist > 200.0:
+                uav.p_ut = 25.0
+            elif dist < 50.0:
+                uav.p_ut = 10.0
+            else:
+                uav.p_ut = 15.0
 
+    # ========================================================================
+    # Observation: Dec-POMDP (식 29 / 식 30)
+    # ========================================================================
     def _get_obs(self):
+        """
+        식 (29) global state: {q_u, E_u}_u ∪ {tilde_S_k, F_kt, d_Z_kt, eps_kt, W_kt}_k
+        식 (30) local obs: (q_u, E_u, delta_q_uk, tilde_S_k, eps_kt, W_kt)
+        """
+        # ---- Global state ----
+        global_parts = []
+        for u in self.uavs:
+            global_parts.extend(u.pos)
+            global_parts.append(u.energy)
+        for t in self.targets:
+            global_parts.extend(t.S_global)
+            global_parts.append(t.F_kt)
+            global_parts.append(t.d_Z_kt)
+            global_parts.append(t.epsilon_kt)
+            global_parts.append(t.W_kt)
+        global_state = np.array(global_parts, dtype=np.float32)
+        
+        # ---- Local obs ----
         local_obs_list = []
-        for uav in self.uavs:
-            t_idx = uav.assigned_target_id if uav.assigned_target_id is not None else 0
-            target = self.targets[t_idx] # 지금 추적중인 타겟
+        for u_idx, uav in enumerate(self.uavs):
+            t_idx = self.assignment.get(u_idx, 0)
+            target = self.targets[t_idx]
             
-            # eq (29)의 S_t|t^k: 
-            # 실제 target.pos가 아니라(이건 불가능한 이상적 상태), 시스템 내부에서 관리되는 추정 상태를 반환
-            # (이 추정 상태는 _update_tracking_and_energy에서 EKF로 갱신됨)
-            S_t_k = target.est_state # [x_est, y_est, vx_est, vy_est]
-             
-            d_kt_Z = min([np.linalg.norm(target.pos - cz) for cz in self.critical_zones])
+            delta_q = target.S_global[:2] - uav.pos
             
-            # q_ut(2), E_ut(1), F_ukt(1), S_t_k(4), d_kt_Z(1) -> 9차원
-            obs_i = list(uav.pos) + [uav.energy, target.F_ukt] + list(S_t_k) + [d_kt_Z]
-            local_obs_list.append(np.array(obs_i, dtype=np.float32))
-            
-        global_state = np.array(local_obs_list).flatten()
+            obs = (
+                list(uav.pos)                # q_ut (2)
+                + [uav.energy]               # E_ut (1)
+                + list(delta_q)              # delta_q_uk (2)
+                + list(target.S_global)      # tilde_S_kt (4)
+                + [target.epsilon_kt]        # eps_kt (1)
+                + [target.W_kt]              # W_kt (1)
+            )
+            local_obs_list.append(np.array(obs, dtype=np.float32))
+        
         return local_obs_list, global_state
 
+    # ========================================================================
+    # Step (논문 II-A 7단계 운영 절차)
+    # ========================================================================
     def step(self, actions):
         self.time_slot += 1
         
-        # 1. 물리 모델 업데이트 (타겟, 드론 이동)
-        for target in self.targets: target.step(self.dt) # 1스텝 진행
-        for i, uav in enumerate(self.uavs): uav.apply_action(actions[i], self.dt)
-            
-        # 2. AAI 재할당 및 파라미터 업데이트
+        # 1) 타겟 이동 (식 1)
+        for target in self.targets:
+            target.step(self.dt)
+        
+        # 2) UAV 이동 (식 28d)
+        for i, uav in enumerate(self.uavs):
+            uav.apply_action(actions[i], self.dt)
+        
+        # 3) 로컬 EKF + 에너지
+        self._update_local_tracking_and_energy()
+        
+        # 4) BS 융합 (식 21~24)
+        self._bs_fusion()
+        
+        # 5) AAI 재호출
         self._run_aai_heuristic()
         
-        # 3. EKF 추적 업데이트 및 에너지 소모
-        self._update_tracking_and_energy()
-
-        # 4. Eq (31) 기반 보상
-        rewards = self._calculate_rewards()
+        # 6) Global team reward (식 32)
+        team_reward = self._calculate_team_reward()
+        rewards = np.array([[team_reward]] * self.num_uavs, dtype=np.float32)
         
         local_obs, _ = self._get_obs()
         obs = np.array(local_obs, dtype=np.float32)
         dones = np.array([self.time_slot >= self.max_steps] * self.num_uavs, dtype=bool)
-        infos = [{'uav_energy': u.energy} for u in self.uavs]
+        infos = [{'uav_energy': u.energy, 'team_reward': team_reward} for u in self.uavs]
         
-        return obs, rewards, dones, infos # MAPPO 형식
+        return obs, rewards, dones, infos
 
-    def _update_tracking_and_energy(self):
-        dt = self.dt
-        sigma_w_sq = 0.1 # 논문 기준 noise variance (sigma_w^2)
-
-        # 1. 전이 행렬 F 정의 (2)
-        F_mat = np.array([[1, 0, dt, 0], # (델타 = dt)
-                          [0, 1, 0, dt], 
-                          [0, 0, 1, 0], 
-                          [0, 0, 0, 1]], dtype=np.float32)
-        F_inv = np.linalg.inv(F_mat)
-
-        # 2. 공정 잡음 행렬 Q (3)
-        # q11~q33 4개는 Q에 넣기 위한 변수들
-        q11 = dt**4 / 4; q13 = dt**3 / 2
-        q31 = dt**3 / 2; q33 = dt**2
-        
-        Q = np.array([
-            [q11, 0,   q13, 0],
-            [0,   q11, 0,   q13],
-            [q31, 0,   q33, 0],
-            [0,   q31, 0,   q33]
-        ], dtype=np.float32) * sigma_w_sq
-        
-        # Singular Matrix 방지를 위해 아주 작은 값(epsilon)을 대각선에 더해줌 
-        Q += np.eye(4) * 1e-6 # 밑줄에서 종종 역행렬 없는 오류 있어서 작은 값 더해줌 
-        Q_inv = np.linalg.inv(Q) # determinant 구해서 0 나오면 그 때만 노이즈 추가하는 식으로 변경할 수도 있음
-
-        # 3. 정규화 행렬 Lambda (27)
-        Lambda = np.diag([1.0, 1.0, dt, dt]).astype(np.float32)
-
+    # ========================================================================
+    # Local EKF + Energy
+    # ========================================================================
+    def _update_local_tracking_and_energy(self):
         for t in self.targets:
-            # t.is_detected = False
-            t.measurement_info = np.zeros((4, 4), dtype=np.float32) # 각 타임 슬롯마다 초기화
-
-        for uav in self.uavs:
-            uav.is_detected = False
-            target = self.targets[uav.assigned_target_id]
+            t.measurement_info = np.zeros((4, 4), dtype=np.float32)
+        
+        for u_idx, uav in enumerate(self.uavs):
+            t_idx = self.assignment[u_idx]
+            target = self.targets[t_idx]
+            
             snr_sen, e_sen = uav.get_sensing_model(target.pos, self.dt)
-            e_comm = uav.get_comm_model(self.bs_pos, self.dt)
+            alpha_ukt = 1 if snr_sen >= self.snr_threshold else 0
+            uav.is_detected_per_target[t_idx] = alpha_ukt
+            
+            e_comm, R_c_ut = uav.get_comm_model(self.bs_pos, self.dt, alpha_ukt)
             e_move = uav.get_mobility_energy(self.dt)
-
-            e_tot = e_sen + e_comm + e_move # 이번 슬롯에서 총 에너지 소모량
-            uav.energy -= e_tot # 에너지 차감
-            uav.last_e_tot = e_tot # 마지막 에너지 소모량 저장 (보상 계산할때 쓰임)
-
-            if snr_sen >= self.snr_threshold: # 임계값 넘기면 성공
-                uav.is_detected = True
-                ## (11), 식은 uav 중심 위치여서 대신 dx dy로 xkt, ykt 표현
-                dx, dy = target.pos[0] - uav.pos[0], target.pos[1] - uav.pos[1]
-                dist_2d_sq = dx**2 + dy**2
-                if dist_2d_sq > 0:
-                    H = np.array([[dx/np.sqrt(dist_2d_sq), dy/np.sqrt(dist_2d_sq), 0, 0],
-                                [-dy/dist_2d_sq, dx/dist_2d_sq, 0, 0]], dtype=np.float32)
-                else:
-                    H = np.zeros((2, 4), dtype=np.float32) # 위치 정확히 고정한게 아니라면 이럴 가능성은 없음
-                # (5) 잘 이해 안가서 일단 snr 비례하게 근사
-                R_inv = np.array([[snr_sen, 0], [0, snr_sen/0.1]], dtype=np.float32)
-                target.measurement_info += H.T @ R_inv @ H # 알파ukt 곱 안하는 이유: 0이면 어차피 if문 안들어옴
-
-        # PCRLB 및 est_state 갱신
+            
+            e_tot = e_sen + e_comm + e_move
+            uav.last_e_tot = e_tot
+            uav.energy = max(uav.energy - e_tot, 0)
+            
+            # 식 (11): Jacobian H_ukt - 상대좌표
+            if alpha_ukt == 1:
+                dx = target.pos[0] - uav.pos[0]
+                dy = target.pos[1] - uav.pos[1]
+                r_sq = dx**2 + dy**2
+                r = math.sqrt(r_sq) if r_sq > 0 else 1e-6
+                
+                H = np.array([
+                    [dx/r,    dy/r,    0, 0],
+                    [-dy/r_sq, dx/r_sq, 0, 0]
+                ], dtype=np.float32)
+                
+                # 식 (5): R_t
+                sigma_r_sq = self.sigma_r0_sq / max(snr_sen, 1e-6)
+                sigma_theta_sq = self.sigma_theta0_sq / max(snr_sen, 1e-6)
+                R_t = np.diag([sigma_r_sq, sigma_theta_sq]).astype(np.float32)
+                R_inv = np.linalg.inv(R_t)
+                
+                # 식 (26): alpha_ukt * H^T R^-1 H
+                target.measurement_info += H.T @ R_inv @ H
+                
+                # 로컬 EKF 사후 추정 (식 8~14)
+                true_meas = np.array([
+                    math.sqrt(r_sq),
+                    math.atan2(dy, dx)
+                ], dtype=np.float32)
+                noise = np.random.multivariate_normal([0, 0], R_t).astype(np.float32)
+                z_ukt = true_meas + noise
+                
+                S_pred = self.F_mat @ target.S_global
+                P_pred = self.F_mat @ target.P_global @ self.F_mat.T + self.Q
+                
+                S_innov = H @ P_pred @ H.T + R_t
+                K = P_pred @ H.T @ np.linalg.inv(S_innov + np.eye(2)*1e-6)
+                
+                pred_meas = np.array([
+                    math.sqrt((S_pred[0] - uav.pos[0])**2 + (S_pred[1] - uav.pos[1])**2),
+                    math.atan2(S_pred[1] - uav.pos[1], S_pred[0] - uav.pos[0])
+                ], dtype=np.float32)
+                S_local = S_pred + K @ (z_ukt - pred_meas)
+                P_local = (np.eye(4) - K @ H) @ P_pred
+                
+                uav.local_estimates[t_idx] = (S_local, P_local)
+            else:
+                uav.local_estimates[t_idx] = None
+        
+        # 각 타겟의 BFIM 누적 (식 26)
         for target in self.targets:
-            prior_J = F_inv.T @ target.J_matrix @ F_inv + Q_inv # (26)의 Q부분까지
+            prior_J = self.F_inv.T @ target.J_matrix @ self.F_inv + self.Q_inv
             target.J_matrix = prior_J + target.measurement_info
             try:
-                PCRLB = np.linalg.inv(target.J_matrix) # J(Skt)의 역행렬
-                target.F_ukt = np.trace(Lambda @ PCRLB @ Lambda.T)
+                PCRLB = np.linalg.inv(target.J_matrix)
+                target.F_kt = float(np.trace(self.Lambda @ PCRLB @ self.Lambda.T))
             except np.linalg.LinAlgError:
-                target.F_ukt = 1000.0 # 임의값
+                target.F_kt = 1000.0
 
-            # 임시로 EKF 직접 안하고 무작위 노이즈로 (추후 수정)
-            noise_std = np.sqrt(max(target.F_ukt, 1e-6)) * 0.1
-            noise = np.random.normal(0, noise_std, size=4)
-            target.est_state = np.concatenate([target.pos, target.velocity]) + noise 
+    # ========================================================================
+    # BS Fusion (식 21~24)
+    # ========================================================================
+    def _bs_fusion(self):
+        for t_idx, target in enumerate(self.targets):
+            contributors = []
+            for u_idx, uav in enumerate(self.uavs):
+                est = uav.local_estimates.get(t_idx)
+                if est is not None:
+                    contributors.append(est)
+            
+            if len(contributors) == 0:
+                target.S_global = self.F_mat @ target.S_global
+                target.P_global = self.F_mat @ target.P_global @ self.F_mat.T + self.Q
+                continue
+            
+            omega = 1.0 / len(contributors)
+            
+            # 식 (22)
+            P_inv_sum = np.zeros((4, 4), dtype=np.float32)
+            S_weighted = np.zeros(4, dtype=np.float32)
+            for S_ut, P_ut in contributors:
+                try:
+                    P_ut_inv = np.linalg.inv(P_ut + np.eye(4) * 1e-6)
+                except np.linalg.LinAlgError:
+                    continue
+                P_inv_sum += omega * P_ut_inv
+                S_weighted += omega * (P_ut_inv @ S_ut)
+            
+            try:
+                P_tilde = np.linalg.inv(P_inv_sum + np.eye(4) * 1e-6)
+                S_tilde = P_tilde @ S_weighted          # 식 (21)
+            except np.linalg.LinAlgError:
+                continue
+            
+            # 식 (23)(24)
+            S_pred_global = self.F_mat @ target.S_global
+            P_pred_global = self.F_mat @ target.P_global @ self.F_mat.T + self.Q
+            try:
+                K_global = P_pred_global @ np.linalg.inv(P_pred_global + P_tilde + np.eye(4) * 1e-6)
+                target.S_global = S_pred_global + K_global @ (S_tilde - S_pred_global)
+                target.P_global = (np.eye(4) - K_global) @ P_pred_global
+            except np.linalg.LinAlgError:
+                target.S_global = S_pred_global
+                target.P_global = P_pred_global
 
-    def _calculate_rewards(self):
-        """Eq (31) 기반 다중 목적 보상 계산"""
-        rewards = []
-        lam1, lam2, lam3 = 1.0, 50.0, 100.0 
-        epsilon = 5.0 
-        d_th = 100.0  
-        epsilon_0 = 0.01 
-
-        for uav in self.uavs:
-            target = self.targets[uav.assigned_target_id]
-            d_kt_Z = min([np.linalg.norm(target.pos - cz) for cz in self.critical_zones])
-            
-            r1 = -uav.last_e_tot
-            
-            # W_t를 곱하여 위험 구역에서 추적 오차에 더 큰 페널티를 부여
-            r2 = -lam1 * max(target.F_ukt - epsilon, 0) * uav.W_t
-            
-            alpha_ukt = 1 if uav.is_detected else 0
-            r3 = -lam2 * (1 - alpha_ukt)
-            
-            r4 = 0
-            if d_kt_Z <= d_th:
-                r4 = -(lam3 / (d_kt_Z**2 + epsilon_0))
-            
-            total_reward = r1 + r2 + r3 + r4
-            rewards.append([total_reward])
-            
-        return np.array(rewards, dtype=np.float32)
-    
-# TO-DO
-# BS 퓨전 도입하기
-# EKF 정식 도입하기
-# 식 (5) 도입하기
-# AAI에 LLM 도입하기
-# 논문 수정되면 반영하기
+    # ========================================================================
+    # Global Team Reward (식 32)
+    # r_t = -sum_u E_tot - sum_k W_kt(lam1*F_kt + lam2*prod(1-alpha)) - lam3*C_t
+    # ========================================================================
+    def _calculate_team_reward(self):
+        total_energy = sum(u.last_e_tot for u in self.uavs)
+        r_energy = -total_energy
+        
+        r_tracking = 0.0
+        for t_idx, target in enumerate(self.targets):
+            prod_loss = 1
+            for u_idx, uav in enumerate(self.uavs):
+                if self.assignment.get(u_idx) == t_idx:
+                    prod_loss *= (1 - uav.is_detected_per_target.get(t_idx, 0))
+            r_tracking -= target.W_kt * (
+                self.lam1 * target.F_kt + self.lam2 * prod_loss
+            )
+        
+        # 식 (28e) UAV 간 충돌
+        C_t = 0
+        for i in range(self.num_uavs):
+            for j in range(i+1, self.num_uavs):
+                if np.linalg.norm(self.uavs[i].pos - self.uavs[j].pos) < self.d_min:
+                    C_t += 1
+        # 맵 경계 위반
+        for u in self.uavs:
+            if not (self.map_min <= u.pos[0] <= self.map_max and
+                    self.map_min <= u.pos[1] <= self.map_max):
+                C_t += 1
+        r_collision = -self.lam3 * C_t
+        
+        return float(r_energy + r_tracking + r_collision)
