@@ -258,8 +258,14 @@ class UAVTrackingEnv(gym.Env):
         self._run_aai_heuristic()
         
         local_obs, global_state = self._get_obs()
+        obs = np.array(local_obs, dtype=np.float32)
         share_obs = np.array([global_state] * self.num_uavs, dtype=np.float32)
-        return np.array(local_obs, dtype=np.float32), share_obs
+        # NaN/Inf 가드
+        obs = np.nan_to_num(obs, nan=0.0, posinf=1e6, neginf=-1e6)
+        share_obs = np.nan_to_num(share_obs, nan=0.0, posinf=1e6, neginf=-1e6)
+        obs = np.clip(obs, -1e4, 1e4)
+        share_obs = np.clip(share_obs, -1e4, 1e4)
+        return obs, share_obs
 
     # ========================================================================
     # AAI Framework (논문 IV-A)
@@ -326,18 +332,26 @@ class UAVTrackingEnv(gym.Env):
         """
         식 (29) global state: {q_u, E_u}_u ∪ {tilde_S_k, F_kt, d_Z_kt, eps_kt, W_kt}_k
         식 (30) local obs: (q_u, E_u, delta_q_uk, tilde_S_k, eps_kt, W_kt)
+        
+        정규화: 위치/거리 → /500 (맵 크기), 에너지 → /max_energy
+                F_kt → /1000 (안정화), W/eps → 그대로 (이미 작은 값)
         """
+        POS_SCALE = 500.0
+        E_SCALE = 100000.0
+        F_SCALE = 1000.0
+        
         # ---- Global state ----
         global_parts = []
         for u in self.uavs:
-            global_parts.extend(u.pos)
-            global_parts.append(u.energy)
+            global_parts.extend(u.pos / POS_SCALE)
+            global_parts.append(u.energy / E_SCALE)
         for t in self.targets:
-            global_parts.extend(t.S_global)
-            global_parts.append(t.F_kt)
-            global_parts.append(t.d_Z_kt)
-            global_parts.append(t.epsilon_kt)
-            global_parts.append(t.W_kt)
+            global_parts.extend(t.S_global[:2] / POS_SCALE)         # 위치
+            global_parts.extend(t.S_global[2:] / 10.0)              # 속도 (vmax=10)
+            global_parts.append(t.F_kt / F_SCALE)
+            global_parts.append(t.d_Z_kt / POS_SCALE)
+            global_parts.append(t.epsilon_kt / 10.0)
+            global_parts.append(t.W_kt / 5.0)
         global_state = np.array(global_parts, dtype=np.float32)
         
         # ---- Local obs ----
@@ -346,15 +360,16 @@ class UAVTrackingEnv(gym.Env):
             t_idx = self.assignment.get(u_idx, 0)
             target = self.targets[t_idx]
             
-            delta_q = target.S_global[:2] - uav.pos
+            delta_q = (target.S_global[:2] - uav.pos) / POS_SCALE
             
             obs = (
-                list(uav.pos)                # q_ut (2)
-                + [uav.energy]               # E_ut (1)
-                + list(delta_q)              # delta_q_uk (2)
-                + list(target.S_global)      # tilde_S_kt (4)
-                + [target.epsilon_kt]        # eps_kt (1)
-                + [target.W_kt]              # W_kt (1)
+                list(uav.pos / POS_SCALE)               # q_ut (2)
+                + [uav.energy / E_SCALE]                # E_ut (1)
+                + list(delta_q)                         # delta_q_uk (2)
+                + list(target.S_global[:2] / POS_SCALE) # tilde_S_kt 위치 (2)
+                + list(target.S_global[2:] / 10.0)      # tilde_S_kt 속도 (2)
+                + [target.epsilon_kt / 10.0]            # eps_kt (1)
+                + [target.W_kt / 5.0]                   # W_kt (1)
             )
             local_obs_list.append(np.array(obs, dtype=np.float32))
         
@@ -390,6 +405,15 @@ class UAVTrackingEnv(gym.Env):
         local_obs, global_state = self._get_obs()
         obs = np.array(local_obs, dtype=np.float32)
         share_obs = np.array([global_state] * self.num_uavs, dtype=np.float32)
+        
+        # 최종 NaN/Inf 가드 (수치 폭발 방지)
+        obs = np.nan_to_num(obs, nan=0.0, posinf=1e6, neginf=-1e6)
+        share_obs = np.nan_to_num(share_obs, nan=0.0, posinf=1e6, neginf=-1e6)
+        rewards = np.nan_to_num(rewards, nan=-1000.0, posinf=1e6, neginf=-1e6)
+        # 큰 값 클리핑 (학습 안정성)
+        obs = np.clip(obs, -1e4, 1e4)
+        share_obs = np.clip(share_obs, -1e4, 1e4)
+        
         dones = np.array([self.time_slot >= self.max_steps] * self.num_uavs, dtype=bool)
         infos = [{'uav_energy': u.energy, 'team_reward': team_reward} for u in self.uavs]
         
@@ -542,18 +566,19 @@ class UAVTrackingEnv(gym.Env):
     # r_t = -sum_u E_tot - sum_k W_kt(lam1*F_kt + lam2*prod(1-alpha)) - lam3*C_t
     # ========================================================================
     def _calculate_team_reward(self):
+        # 에너지 정규화 (한 스텝당 ~100, 보상 스케일 줄이기)
         total_energy = sum(u.last_e_tot for u in self.uavs)
-        r_energy = -total_energy
+        r_energy = -total_energy / 100.0
         
-        # 식 (32) tracking term: 모든 UAV (할당 무관)에 대한 곱
-        # 논문의 prod_{u in U} (1 - alpha_ukt)는 "어떤 UAV도 감지 못함"을 표현
+        # 식 (32) tracking term: 모든 UAV에 대한 곱
         r_tracking = 0.0
         for t_idx, target in enumerate(self.targets):
             prod_loss = 1
             for uav in self.uavs:
                 prod_loss *= (1 - uav.is_detected_per_target.get(t_idx, 0))
+            # F_kt도 스케일링
             r_tracking -= target.W_kt * (
-                self.lam1 * target.F_kt + self.lam2 * prod_loss
+                self.lam1 * (target.F_kt / 100.0) + self.lam2 * prod_loss
             )
         
         # 식 (28e) UAV 간 충돌
@@ -562,7 +587,6 @@ class UAVTrackingEnv(gym.Env):
             for j in range(i+1, self.num_uavs):
                 if np.linalg.norm(self.uavs[i].pos - self.uavs[j].pos) < self.d_min:
                     C_t += 1
-        # 맵 경계 위반
         for u in self.uavs:
             if not (self.map_min <= u.pos[0] <= self.map_max and
                     self.map_min <= u.pos[1] <= self.map_max):
@@ -572,7 +596,6 @@ class UAVTrackingEnv(gym.Env):
         # 식 (28g) 통신률 제약 위반 페널티
         r_comm = 0.0
         for u in self.uavs:
-            # alpha=1인 UAV에 한해 R_c >= R_c_th 요구
             for t_idx, alpha in u.is_detected_per_target.items():
                 if alpha == 1 and u.last_R_c < self.R_c_threshold:
                     r_comm -= self.lam4 * (self.R_c_threshold - u.last_R_c) / self.R_c_threshold
