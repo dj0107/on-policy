@@ -257,9 +257,8 @@ class UAVTrackingEnv(gym.Env):
         
         self._run_aai_heuristic()
         
-        local_obs, global_state = self._get_obs()
-        share_obs = np.array([global_state] * self.num_uavs, dtype=np.float32)
-        return np.array(local_obs, dtype=np.float32), share_obs
+        local_obs, _ = self._get_obs()
+        return np.array(local_obs, dtype=np.float32)
 
     # ========================================================================
     # AAI Framework (논문 IV-A)
@@ -387,13 +386,12 @@ class UAVTrackingEnv(gym.Env):
         team_reward = self._calculate_team_reward()
         rewards = np.array([[team_reward]] * self.num_uavs, dtype=np.float32)
         
-        local_obs, global_state = self._get_obs()
+        local_obs, _ = self._get_obs()
         obs = np.array(local_obs, dtype=np.float32)
-        share_obs = np.array([global_state] * self.num_uavs, dtype=np.float32)
         dones = np.array([self.time_slot >= self.max_steps] * self.num_uavs, dtype=bool)
         infos = [{'uav_energy': u.energy, 'team_reward': team_reward} for u in self.uavs]
         
-        return obs, share_obs, rewards, dones, infos
+        return obs, rewards, dones, infos
 
     # ========================================================================
     # Local EKF + Energy
