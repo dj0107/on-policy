@@ -257,8 +257,9 @@ class UAVTrackingEnv(gym.Env):
         
         self._run_aai_heuristic()
         
-        local_obs, _ = self._get_obs()
-        return np.array(local_obs, dtype=np.float32)
+        local_obs, global_state = self._get_obs()
+        share_obs = np.array([global_state] * self.num_uavs, dtype=np.float32)
+        return np.array(local_obs, dtype=np.float32), share_obs
 
     # ========================================================================
     # AAI Framework (논문 IV-A)
@@ -386,12 +387,13 @@ class UAVTrackingEnv(gym.Env):
         team_reward = self._calculate_team_reward()
         rewards = np.array([[team_reward]] * self.num_uavs, dtype=np.float32)
         
-        local_obs, _ = self._get_obs()
+        local_obs, global_state = self._get_obs()
         obs = np.array(local_obs, dtype=np.float32)
+        share_obs = np.array([global_state] * self.num_uavs, dtype=np.float32)
         dones = np.array([self.time_slot >= self.max_steps] * self.num_uavs, dtype=bool)
         infos = [{'uav_energy': u.energy, 'team_reward': team_reward} for u in self.uavs]
         
-        return obs, rewards, dones, infos
+        return obs, share_obs, rewards, dones, infos
 
     # ========================================================================
     # Local EKF + Energy
@@ -451,14 +453,18 @@ class UAVTrackingEnv(gym.Env):
                 S_innov = H @ P_pred @ H.T + R_t
                 K = P_pred @ H.T @ np.linalg.inv(S_innov + np.eye(2)*1e-6)
                 
-                pred_meas = np.array([
-                    math.sqrt((S_pred[0] - uav.pos[0])**2 + (S_pred[1] - uav.pos[1])**2),
-                    math.atan2(S_pred[1] - uav.pos[1], S_pred[0] - uav.pos[0])
-                ], dtype=np.float32)
+                dx_pred = float(S_pred[0]) - float(uav.pos[0])
+                dy_pred = float(S_pred[1]) - float(uav.pos[1])
+                dist_sq = dx_pred**2 + dy_pred**2
+                r_pred = math.sqrt(dist_sq) if dist_sq < 1e16 else 1e8
+                pred_meas = np.array([r_pred, math.atan2(dy_pred, dx_pred)], dtype=np.float32)
                 S_local = S_pred + K @ (z_ukt - pred_meas)
                 P_local = (np.eye(4) - K @ H) @ P_pred
-                
-                uav.local_estimates[t_idx] = (S_local, P_local)
+                # NaN 가드
+                if np.isnan(S_local).any() or np.isnan(P_local).any():
+                    uav.local_estimates[t_idx] = None
+                else:
+                    uav.local_estimates[t_idx] = (S_local, P_local)
             else:
                 uav.local_estimates[t_idx] = None
         
@@ -490,20 +496,24 @@ class UAVTrackingEnv(gym.Env):
             
             omega = 1.0 / len(contributors)
             
-            # 식 (22)
-            P_inv_sum = np.zeros((4, 4), dtype=np.float32)
-            S_weighted = np.zeros(4, dtype=np.float32)
+            # 식 (22): P_ut 크기 폭발 방지 (float64로 업캐스트)
+            P_inv_sum = np.zeros((4, 4), dtype=np.float64)
+            S_weighted = np.zeros(4, dtype=np.float64)
             for S_ut, P_ut in contributors:
                 try:
-                    P_ut_inv = np.linalg.inv(P_ut + np.eye(4) * 1e-6)
+                    P_ut64 = P_ut.astype(np.float64)
+                    # 공분산이 너무 크면 클리핑 (수치 안정성)
+                    P_ut64 = np.clip(P_ut64, -1e6, 1e6)
+                    P_ut_inv = np.linalg.inv(P_ut64 + np.eye(4) * 1e-4)
                 except np.linalg.LinAlgError:
                     continue
                 P_inv_sum += omega * P_ut_inv
-                S_weighted += omega * (P_ut_inv @ S_ut)
+                S_weighted += omega * (P_ut_inv @ S_ut.astype(np.float64))
             
             try:
-                P_tilde = np.linalg.inv(P_inv_sum + np.eye(4) * 1e-6)
-                S_tilde = P_tilde @ S_weighted          # 식 (21)
+                P_tilde = np.linalg.inv(P_inv_sum + np.eye(4) * 1e-4)
+                S_tilde = (P_tilde @ S_weighted).astype(np.float32)
+                P_tilde = P_tilde.astype(np.float32)
             except np.linalg.LinAlgError:
                 continue
             
@@ -511,9 +521,18 @@ class UAVTrackingEnv(gym.Env):
             S_pred_global = self.F_mat @ target.S_global
             P_pred_global = self.F_mat @ target.P_global @ self.F_mat.T + self.Q
             try:
-                K_global = P_pred_global @ np.linalg.inv(P_pred_global + P_tilde + np.eye(4) * 1e-6)
-                target.S_global = S_pred_global + K_global @ (S_tilde - S_pred_global)
-                target.P_global = (np.eye(4) - K_global) @ P_pred_global
+                P_pred64 = P_pred_global.astype(np.float64)
+                P_tilde64 = P_tilde.astype(np.float64)
+                K_global = P_pred64 @ np.linalg.inv(P_pred64 + P_tilde64 + np.eye(4) * 1e-4)
+                S_new = S_pred_global + (K_global @ (S_tilde - S_pred_global).astype(np.float64)).astype(np.float32)
+                P_new = ((np.eye(4) - K_global) @ P_pred64).astype(np.float32)
+                # NaN/Inf 최종 가드
+                if np.isnan(S_new).any() or np.isinf(S_new).any():
+                    target.S_global = S_pred_global
+                    target.P_global = P_pred_global
+                else:
+                    target.S_global = S_new
+                    target.P_global = np.clip(P_new, -1e6, 1e6)
             except np.linalg.LinAlgError:
                 target.S_global = S_pred_global
                 target.P_global = P_pred_global
