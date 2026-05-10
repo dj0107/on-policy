@@ -1,5 +1,61 @@
-enyironment.yaml에 있는 환경들 콘다로 설치 후 train 디렉토리로 이동해서
-python train_uav.py --env_name UAV --scenario_name simple_spread --algorithm_name mappo --experiment_name final_run --n_rollout_threads 4 --num_agents 5 로 실행
+사용법 (업데이트)
+=================
+
+[원래의 학습 사용법]
+environment.yaml에 있는 환경들 콘다로 설치 후 train 디렉토리로 이동해서:
+
+  python train_uav.py --env_name UAV --scenario_name uav_tracking \
+      --algorithm_name mappo --experiment_name nalpari_v1 \
+      --n_rollout_threads 4 --num_agents 5 --use_eval
 
 *** train_uav.py가 train 바깥 디렉토리로 접근을 못하기 때문에, 환경 변수 추가가 필요할 수 있습니다.
 *** CUDA 설치하시면 GPU로 돌리실 수 있습니다.
+
+
+[새로 추가된 평가/시각화 도구 사용법]
+
+학습이 끝나면 다음 위치에 체크포인트 + 메타데이터가 자동 저장됩니다:
+  onpolicy/scripts/results/UAV/uav_tracking/mappo/<EXP_NAME>/run1/models/
+    actor.pt, critic.pt          (기존)
+    run_meta.json, all_args.pkl  (새로 추가됨)
+
+전체 파이프라인을 한번에 돌리려면:
+  bash run_full_pipeline.sh
+  (스크립트 상단의 EXP_NAME, NUM_AGENTS 등 변수 수정 가능)
+
+수동으로 단계별 실행:
+
+  1. 학습된 정책 평가 (sweep + episode)
+     python tools/evaluate_trained.py \
+         --checkpoint_dir path/to/run1/models \
+         --baseline mappo+aai \
+         --out_dir evaluation/mappo_aai \
+         --sweep_uav 3 5 7 10 \
+         --sweep_target 1 2 3 4 \
+         --save_episode --episode_seeds 42 100
+
+  2. 다른 baseline 평가 (--baseline 옵션만 바꾸면 됨)
+     mappo+aai     : 학습된 정책 + heuristic AAI
+     mappo         : 학습된 정책 + AAI 무사용 (대조군)
+     naive_greedy  : 학습 X, 직진
+     random        : 학습 X, 랜덤
+     hover         : 학습 X, 정지
+     llm_aai       : 학습된 정책 + LLM AAI (ANTHROPIC_API_KEY 필요)
+
+  3. LLM AAI 사용 (Step 1)
+     export ANTHROPIC_API_KEY=sk-ant-...
+     python tools/evaluate_trained.py \
+         --baseline llm_aai \
+         --aai_callback tools.llm_aai:default_callback \
+         ...
+
+     환경 변수로 모델/throttling 조절:
+       LLM_AAI_MODEL=claude-sonnet-4-5      (default)
+       LLM_AAI_CALL_EVERY=10                (매 K step마다 LLM 호출)
+
+  4. 시각화 (3종)
+     python tools/plot_system_diagram.py --out_dir figures/
+     python tools/plot_energy_curves.py --results_dir <combined_dir> --out_dir figures/
+     python tools/plot_episode.py --episode_npz <ep.npz> --out_path figures/ep.png
+
+자세한 내용은 README.md 참고.

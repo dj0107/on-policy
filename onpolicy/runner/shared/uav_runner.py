@@ -1,4 +1,7 @@
 import time
+import os
+import json
+import pickle
 import numpy as np
 import torch
 from onpolicy.runner.shared.base_runner import Runner
@@ -12,12 +15,39 @@ def _t2n(x):
 class UAVRunner(Runner):
     """
     UAV Tracking 환경 전용 Runner.
-    MPERunner와 거의 같지만, 환경이 (obs, share_obs)와
-    (obs, share_obs, rewards, dones, infos)를 직접 반환하므로
-    그 share_obs를 critic에 그대로 사용 (식 29의 진짜 global state).
     """
     def __init__(self, config):
         super(UAVRunner, self).__init__(config)
+        # 학습 시작 시 환경 메타데이터를 한 번만 저장 (평가 시 정확한 dim 복원용)
+        self._save_run_meta()
+
+    def _save_run_meta(self):
+        """평가 시 actor를 정확히 재구성하는 데 필요한 정보를 저장."""
+        meta = {
+            'algorithm_name': self.algorithm_name,
+            'num_agents': self.num_agents,
+            'episode_length': self.episode_length,
+            'use_centralized_V': self.use_centralized_V,
+            'use_recurrent_policy': self.all_args.use_recurrent_policy,
+            'use_naive_recurrent_policy': self.all_args.use_naive_recurrent_policy,
+            'hidden_size': self.all_args.hidden_size,
+            'recurrent_N': self.all_args.recurrent_N,
+            'obs_shape': list(self.envs.observation_space[0].shape),
+            'share_obs_shape': list(self.envs.share_observation_space[0].shape),
+            'action_shape': list(self.envs.action_space[0].shape),
+            'action_low': float(self.envs.action_space[0].low.min()),
+            'action_high': float(self.envs.action_space[0].high.max()),
+        }
+        save_dir = str(self.save_dir)
+        os.makedirs(save_dir, exist_ok=True)
+        with open(os.path.join(save_dir, 'run_meta.json'), 'w') as f:
+            json.dump(meta, f, indent=2)
+        # all_args 전체도 pickle로 저장 (정확한 복원 가능)
+        try:
+            with open(os.path.join(save_dir, 'all_args.pkl'), 'wb') as f:
+                pickle.dump(vars(self.all_args), f)
+        except Exception as e:
+            print(f'[warn] all_args.pkl save failed: {e}')
 
     def run(self):
         self.warmup()
