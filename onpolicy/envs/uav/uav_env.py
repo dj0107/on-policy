@@ -18,7 +18,7 @@ class Target:
     """타겟 상태, EKF용 fused estimate, BFIM 관리"""
     def __init__(self, target_id, initial_pos, initial_velocity):
         self.id = target_id
-        self.pos = np.array(initial_pos, dtype=np.float32)        # 실제 위치 (시뮬용 ground truth)
+        self.pos = np.array(initial_pos, dtype=np.float32)        # (전지적 시점) 실제 위치 (시뮬용, 각 UAV는 못봄)
         self.velocity = np.array(initial_velocity, dtype=np.float32)
         
         # BS에서 융합된 글로벌 추정 상태 (식 23, 24)
@@ -120,7 +120,7 @@ class UAV:
         p_nlos = 1 - p_los
         
         h_c = ((p_los * self.eta_LoS + p_nlos * self.eta_NLoS) * (self.lam**2)) \
-              / ((4 * math.pi * d_ut_3d)**2 + 1e-12)
+              / ((4 * math.pi * d_ut_3d)**2 + 1e-12) # Q: d_ut가 0일때 값이 너무 튀는거 아닌가?
         
         snr_comm = (self.p_ut * h_c) / self.N0
         tau_c = (1 - self.tau_s_ratio) * dt
@@ -177,7 +177,7 @@ class UAVTrackingEnv(gym.Env):
         self.sigma_theta0_sq = 1e-4
         self._precompute_ekf_matrices()
         
-        # 더미 초기화 (obs_dim 계산용)
+        # 더미 초기화 (최초 obs_dim 계산용)
         self.uavs = [UAV(i, [0, 0], altitude=100.0) for i in range(self.num_uavs)]
         self.targets = [Target(i, [0, 0], [0, 0]) for i in range(self.num_targets)]
         self.assignment = {u: 0 for u in range(self.num_uavs)}
@@ -352,7 +352,7 @@ class UAVTrackingEnv(gym.Env):
             global_parts.append(t.d_Z_kt / POS_SCALE)
             global_parts.append(t.epsilon_kt / 10.0)
             global_parts.append(t.W_kt / 5.0)
-        global_state = np.array(global_parts, dtype=np.float32)
+        global_state = np.array(global_parts, dtype=np.float32) #st
         
         # ---- Local obs ----
         local_obs_list = []
@@ -374,31 +374,32 @@ class UAVTrackingEnv(gym.Env):
             local_obs_list.append(np.array(obs, dtype=np.float32))
         
         return local_obs_list, global_state
+    
 
     # ========================================================================
     # Step (논문 II-A 7단계 운영 절차)
     # ========================================================================
     def step(self, actions):
         self.time_slot += 1
-        
-        # 1) 타겟 이동 (식 1) - process noise 포함
+        # 타겟이랑 uav 이동은 이전 스텝의 마지막 행동으로 간주
+        # 0) 제일 먼저 타겟 이동 (식 1) - process noise 포함
         for target in self.targets:
             target.step(self.dt, Q=self.Q)
         
-        # 2) UAV 이동 (식 28d)
+        # 0) UAV 이동 (식 28d)
         for i, uav in enumerate(self.uavs):
-            uav.apply_action(actions[i], self.dt)
+            uav.apply_action(actions[i], self.dt) # uav 이동은 
         
-        # 3) 로컬 EKF + 에너지
+        # 1) 로컬 EKF + 에너지
         self._update_local_tracking_and_energy()
         
-        # 4) BS 융합 (식 21~24)
+        # 2) BS 융합 (식 21~24)
         self._bs_fusion()
         
-        # 5) AAI 재호출
+        # 3) AAI 재호출
         self._run_aai_heuristic()
         
-        # 6) Global team reward (식 32)
+        # 4) Global team reward (식 32)
         team_reward = self._calculate_team_reward()
         rewards = np.array([[team_reward]] * self.num_uavs, dtype=np.float32)
         
