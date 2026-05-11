@@ -7,6 +7,9 @@ import numpy as np
 from pathlib import Path
 import torch
 
+# 프로젝트 루트를 sys.path에 추가 (배치 실행 시 PYTHONPATH 문제 해결)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
+
 from onpolicy.config import get_config
 from onpolicy.envs.uav.uav_env import UAVTrackingEnv
 from onpolicy.envs.uav.uav_vec_env import UAVDummyVecEnv
@@ -41,6 +44,9 @@ def parse_args(args, parser):
                         default='uav_tracking', help="Which scenario to run on")
     parser.add_argument('--num_agents', type=int,
                         default=5, help="number of UAV agents")
+    parser.add_argument('--resume_from', type=str, default=None,
+                        help="Path to checkpoint dir to resume training from "
+                             "(e.g. results/UAV/uav_tracking/mappo/nalpari_v1/run1/models)")
     all_args = parser.parse_known_args(args)[0]
     return all_args
 
@@ -74,35 +80,47 @@ def main(args):
         torch.set_num_threads(all_args.n_training_threads)
 
     # run dir
-    run_dir = Path(os.path.split(os.path.dirname(os.path.abspath(__file__)))[0] + "/results") \
-              / all_args.env_name / all_args.scenario_name / all_args.algorithm_name / all_args.experiment_name
-    if not run_dir.exists():
-        os.makedirs(str(run_dir))
-
-    if all_args.use_wandb:
-        import wandb
-        run = wandb.init(config=all_args,
-                         project=all_args.env_name,
-                         entity=all_args.user_name,
-                         notes=socket.gethostname(),
-                         name=str(all_args.algorithm_name) + "_" +
-                              str(all_args.experiment_name) +
-                              "_seed" + str(all_args.seed),
-                         group=all_args.scenario_name,
-                         dir=str(run_dir),
-                         job_type="training",
-                         reinit=True)
-    else:
-        if not run_dir.exists():
-            curr_run = 'run1'
+    if all_args.resume_from is not None:
+        # resume: keep the same run directory
+        run_dir = Path(all_args.resume_from)
+        # resume_from points to .../models/, so run_dir is its parent
+        if run_dir.name == 'models':
+            all_args.model_dir = str(run_dir)
+            run_dir = run_dir.parent
         else:
-            exst_run_nums = [int(str(folder.name).split('run')[1])
-                             for folder in run_dir.iterdir()
-                             if str(folder.name).startswith('run')]
-            curr_run = 'run1' if len(exst_run_nums) == 0 else 'run%i' % (max(exst_run_nums) + 1)
-        run_dir = run_dir / curr_run
+            all_args.model_dir = str(run_dir / 'models')
+        print(f"[resume] Using existing run directory: {run_dir}")
+        print(f"[resume] Will restore from: {all_args.model_dir}")
+    else:
+        run_dir = Path(os.path.split(os.path.dirname(os.path.abspath(__file__)))[0] + "/results") \
+                  / all_args.env_name / all_args.scenario_name / all_args.algorithm_name / all_args.experiment_name
         if not run_dir.exists():
             os.makedirs(str(run_dir))
+
+        if all_args.use_wandb:
+            import wandb
+            run = wandb.init(config=all_args,
+                             project=all_args.env_name,
+                             entity=all_args.user_name,
+                             notes=socket.gethostname(),
+                             name=str(all_args.algorithm_name) + "_" +
+                                  str(all_args.experiment_name) +
+                                  "_seed" + str(all_args.seed),
+                             group=all_args.scenario_name,
+                             dir=str(run_dir),
+                             job_type="training",
+                             reinit=True)
+        else:
+            if not run_dir.exists():
+                curr_run = 'run1'
+            else:
+                exst_run_nums = [int(str(folder.name).split('run')[1])
+                                 for folder in run_dir.iterdir()
+                                 if str(folder.name).startswith('run')]
+                curr_run = 'run1' if len(exst_run_nums) == 0 else 'run%i' % (max(exst_run_nums) + 1)
+            run_dir = run_dir / curr_run
+            if not run_dir.exists():
+                os.makedirs(str(run_dir))
 
     setproctitle.setproctitle(str(all_args.algorithm_name) + "-" +
                               str(all_args.env_name) + "-" +
@@ -130,6 +148,10 @@ def main(args):
 
     runner = UAVRunner(config)
     runner.run()
+
+    # 학습 완료 플래그 저장
+    done_flag = run_dir / 'training_done.txt'
+    done_flag.write_text('Training completed successfully.\n')
 
     envs.close()
     if all_args.use_eval and eval_envs is not envs:
