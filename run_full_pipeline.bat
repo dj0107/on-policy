@@ -75,12 +75,9 @@ if exist "%TRAIN_DONE%" (
 echo   [2] Archive existing results and start fresh
 echo ---
 
-set CHOICE=
-set /p CHOICE=Enter choice (1 or 2): 
-if /i "%CHOICE%"=="2" goto :archive_and_start_fresh
-if /i "%CHOICE%"=="1" goto :training_entry
-echo [warn] Invalid choice; defaulting to option 1.
-goto :training_entry
+choice /c 12 /n /m "Enter choice (1 or 2): "
+if errorlevel 2 goto :archive_and_start_fresh
+if errorlevel 1 goto :training_entry
 
 REM ============================================================
 REM Archive and start fresh
@@ -112,7 +109,7 @@ REM Training entry points
 REM ============================================================
 :training_entry
 if exist "%TRAIN_DONE%" (
-    echo [1/4] Skipping training (already complete).
+    echo [1/4] Skipping training ^(already complete^).
     goto :evaluation
 )
 echo [1/4] Resuming training from checkpoint...
