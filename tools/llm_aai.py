@@ -18,7 +18,7 @@ Usage (evaluate_trained.py에서):
     
     또는 직접:
     from tools.llm_aai import LLMAAI
-    aai = LLMAAI(model='claude-sonnet-4-5', call_every=10)
+    aai = LLMAAI(model='claude-sonnet-4-6', call_every=10)
     env = UAVTrackingEnv(num_uavs=5, num_targets=2, aai_callback=aai.callback)
 
 API 키:
@@ -221,7 +221,7 @@ class LLMAAI:
 
     def __init__(
         self,
-        model: str = 'claude-sonnet-4-5',
+        model: str = 'claude-sonnet-4-6',
         provider: str = 'anthropic',
         call_every: int = 10,
         max_cache_size: int = 5000,
@@ -280,10 +280,45 @@ class LLMAAI:
                 warnings.warn(
                     'openai package not installed; LLMAAI will use heuristic fallback only.'
                 )
+        elif provider == 'deepseek':
+            try:
+                import openai
+                api_key = os.environ.get('DEEPSEEK_API_KEY')
+                if api_key:
+                    self._client = openai.OpenAI(
+                        api_key=api_key,
+                        base_url='https://api.deepseek.com',
+                    )
+                else:
+                    warnings.warn(
+                        'DEEPSEEK_API_KEY not set; LLMAAI will use heuristic fallback only.'
+                    )
+            except ImportError:
+                warnings.warn(
+                    'openai package not installed; LLMAAI will use heuristic fallback only.'
+                )
+        elif provider == 'gemini':
+            try:
+                import openai
+                api_key = os.environ.get('GEMINI_API_KEY')
+                if api_key:
+                    self._client = openai.OpenAI(
+                        api_key=api_key,
+                        base_url='https://generativelanguage.googleapis.com/v1beta/openai/',
+                    )
+                else:
+                    warnings.warn(
+                        'GEMINI_API_KEY not set; LLMAAI will use heuristic fallback only.'
+                    )
+            except ImportError:
+                warnings.warn(
+                    'openai package not installed; LLMAAI will use heuristic fallback only.'
+                )
         elif provider == 'mock':
             pass  # client 없음, heuristic만 사용
         else:
-            raise ValueError(f'unknown provider: {provider}')
+            raise ValueError(f'unknown provider: {provider}. '
+                             f'Supported: anthropic, openai, deepseek, gemini, mock')
 
         # 통계
         self.stats = {
@@ -308,16 +343,19 @@ class LLMAAI:
                         messages=[{"role": "user", "content": user_prompt}],
                     )
                     text = msg.content[0].text
-                elif self.provider == 'openai':
-                    resp = self._client.chat.completions.create(
+                elif self.provider in ('openai', 'deepseek', 'gemini'):
+                    kwargs = dict(
                         model=self.model,
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt},
                         ],
-                        response_format={"type": "json_object"},
                         timeout=self.timeout,
                     )
+                    # response_format JSON mode: openai/deepseek 지원, gemini는 미적용
+                    if self.provider in ('openai', 'deepseek'):
+                        kwargs['response_format'] = {"type": "json_object"}
+                    resp = self._client.chat.completions.create(**kwargs)
                     text = resp.choices[0].message.content
                 else:
                     return None
@@ -482,16 +520,25 @@ _default_instance: Optional[LLMAAI] = None
 
 def default_callback(env):
     """evaluate_trained.py --aai_callback tools.llm_aai:default_callback 용.
-    
+
     환경 변수로 LLM 설정:
-        LLM_AAI_MODEL=claude-sonnet-4-5
-        LLM_AAI_PROVIDER=anthropic    # 또는 openai, mock
-        LLM_AAI_CALL_EVERY=10
+        LLM_AAI_PROVIDER=anthropic    → ANTHROPIC_API_KEY 필요
+        LLM_AAI_PROVIDER=openai       → OPENAI_API_KEY 필요
+        LLM_AAI_PROVIDER=deepseek     → DEEPSEEK_API_KEY 필요
+        LLM_AAI_PROVIDER=gemini       → GEMINI_API_KEY 필요
+        LLM_AAI_PROVIDER=mock         → API 없이 heuristic만 사용
+
+        LLM_AAI_MODEL=claude-sonnet-4-6   (anthropic 기본)
+        LLM_AAI_MODEL=gpt-4o              (openai)
+        LLM_AAI_MODEL=deepseek-chat       (deepseek)
+        LLM_AAI_MODEL=gemini-2.0-flash    (gemini)
+
+        LLM_AAI_CALL_EVERY=10   (매 K step마다 LLM 호출)
     """
     global _default_instance
     if _default_instance is None:
         _default_instance = LLMAAI(
-            model=os.environ.get('LLM_AAI_MODEL', 'claude-sonnet-4-5'),
+            model=os.environ.get('LLM_AAI_MODEL', 'claude-sonnet-4-6'),
             provider=os.environ.get('LLM_AAI_PROVIDER', 'anthropic'),
             call_every=int(os.environ.get('LLM_AAI_CALL_EVERY', '10')),
             verbose=os.environ.get('LLM_AAI_VERBOSE', '0') == '1',

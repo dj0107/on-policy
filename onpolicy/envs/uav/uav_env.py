@@ -77,8 +77,8 @@ class UAV:
 
         self.f_c = 2.4e9
         self.lam = 3e8 / self.f_c
-        self.G_t = 100.0
-        self.G_r = 1000.0
+        self.G_t = 1.0    # 탐지 거리 ~307m (맵 30%), 의미 있는 탐지 도전
+        self.G_r = 30.0
         self.sigma = 1.0
         self.N0 = 1e-14
         self.c1, self.c2 = 11.9, 0.13

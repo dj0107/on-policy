@@ -74,7 +74,6 @@
 """
 
 import sys
-sys.path.insert(0, '/home/claude/fixed')
 import os
 import numpy as np
 from onpolicy.envs.uav.uav_env import UAVTrackingEnv
@@ -196,6 +195,7 @@ def run_sweep(env_factory, policy_name, policy_factory, x_axis_label,
             'energy_per_step_mean': all_e.mean(axis=0),
             'energy_per_step_std':  all_e.std(axis=0),
             'F_kt_mean': float(np.mean([s['F_kt_mean'] for s in per_seed_stats])),
+            'F_kt_std':  float(np.std([s['F_kt_mean'] for s in per_seed_stats])),
             'detection_rate': float(np.mean([s['detection_rate'] for s in per_seed_stats])),
             'collision_count': float(np.mean([s['collision_count'] for s in per_seed_stats])),
             'untracked_count': float(np.mean([s['untracked_count'] for s in per_seed_stats])),

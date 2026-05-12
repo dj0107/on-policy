@@ -11,7 +11,7 @@ REM Config  (edit here)
 REM ============================================================
 set EXP_NAME=nalpari_v1
 set NUM_AGENTS=5
-set NUM_ENV_STEPS=2000000
+set NUM_ENV_STEPS=18000000
 set N_ROLLOUT=4
 set N_SEEDS=3
 set N_EPISODES=3
@@ -68,7 +68,7 @@ echo.
 echo ---
 echo What would you like to do?
 if exist "%TRAIN_DONE%" (
-    echo   [1] Skip training (already done), go to evaluation
+    echo   [1] Skip training ^(already done^), go to evaluation
 ) else (
     echo   [1] Resume training from checkpoint
 )
@@ -116,12 +116,12 @@ if exist "%TRAIN_DONE%" (
     goto :evaluation
 )
 echo [1/4] Resuming training from checkpoint...
-set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 100 --use_eval --use_wandb --resume_from %CHECKPOINT_DIR%"
+set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 100 --use_eval --resume_from %CHECKPOINT_DIR%"
 goto :do_training
 
 :fresh_training
 echo [1/4] Starting fresh training... (this may take hours)
-set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 100 --use_eval --use_wandb"
+set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 100 --use_eval"
 goto :do_training
 
 :do_training
@@ -158,12 +158,16 @@ echo   [eval] random
 python tools\evaluate_trained.py --baseline random --out_dir "%EVAL_OUT%\random" --sweep_uav %SWEEP_UAV% --sweep_target %SWEEP_TARGET% --sweep_noise %SWEEP_NOISE% --sweep_tau %SWEEP_TAU% --save_episode --episode_seeds %EPISODE_SEEDS% --n_seeds %N_SEEDS% --n_episodes %N_EPISODES%
 if errorlevel 1 ( echo [ERROR] random eval failed. & goto :error )
 
+echo   [eval] hover
+python tools\evaluate_trained.py --baseline hover --out_dir "%EVAL_OUT%\hover" --sweep_uav %SWEEP_UAV% --sweep_target %SWEEP_TARGET% --sweep_noise %SWEEP_NOISE% --sweep_tau %SWEEP_TAU% --save_episode --episode_seeds %EPISODE_SEEDS% --n_seeds %N_SEEDS% --n_episodes %N_EPISODES%
+if errorlevel 1 ( echo [ERROR] hover eval failed. & goto :error )
+
 if not defined ANTHROPIC_API_KEY (
     echo   [SKIP] llm_aai - ANTHROPIC_API_KEY not set.
     goto :merge
 )
 echo   [eval] llm_aai
-python tools\evaluate_trained.py --baseline llm_aai --out_dir "%EVAL_OUT%\llm_aai" --checkpoint_dir "%CHECKPOINT_DIR%" --aai_callback tools.llm_aai:default_callback --sweep_uav %SWEEP_UAV% --sweep_target %SWEEP_TARGET% --save_episode --episode_seeds %EPISODE_SEEDS% --n_seeds %N_SEEDS% --n_episodes %N_EPISODES%
+python tools\evaluate_trained.py --baseline llm_aai --out_dir "%EVAL_OUT%\llm_aai" --checkpoint_dir "%CHECKPOINT_DIR%" --aai_callback tools.llm_aai:default_callback --sweep_uav %SWEEP_UAV% --sweep_target %SWEEP_TARGET% --sweep_noise %SWEEP_NOISE% --sweep_tau %SWEEP_TAU% --save_episode --episode_seeds %EPISODE_SEEDS% --n_seeds %N_SEEDS% --n_episodes %N_EPISODES%
 if errorlevel 1 ( echo [ERROR] llm_aai eval failed. & goto :error )
 
 REM ============================================================
@@ -178,7 +182,7 @@ if not exist "%COMBINED%\sweep_target" mkdir "%COMBINED%\sweep_target"
 if not exist "%COMBINED%\sweep_noise" mkdir "%COMBINED%\sweep_noise"
 if not exist "%COMBINED%\sweep_tau" mkdir "%COMBINED%\sweep_tau"
 
-for %%V in (mappo_aai mappo_only naive random llm_aai) do (
+for %%V in (mappo_aai mappo_only naive random hover llm_aai) do (
     if exist "%EVAL_OUT%\%%V\sweep_uav\*.npz" copy /Y "%EVAL_OUT%\%%V\sweep_uav\*.npz" "%COMBINED%\sweep_uav\" >nul 2>&1
     if exist "%EVAL_OUT%\%%V\sweep_target\*.npz" copy /Y "%EVAL_OUT%\%%V\sweep_target\*.npz" "%COMBINED%\sweep_target\" >nul 2>&1
     if exist "%EVAL_OUT%\%%V\sweep_noise\*.npz" copy /Y "%EVAL_OUT%\%%V\sweep_noise\*.npz" "%COMBINED%\sweep_noise\" >nul 2>&1

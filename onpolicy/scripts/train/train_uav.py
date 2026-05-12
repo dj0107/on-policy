@@ -21,7 +21,8 @@ from onpolicy.runner.shared.uav_runner import UAVRunner
 def make_train_env(all_args):
     def get_env_fn(rank):
         def init_env():
-            env = UAVTrackingEnv(num_uavs=all_args.num_agents, num_targets=2)
+            env = UAVTrackingEnv(num_uavs=all_args.num_agents, num_targets=2,
+                                 randomize_aai=True)  # AAI domain randomization → LLM 값 범위에 일반화
             env.seed(all_args.seed + rank * 1000)
             return env
         return init_env
