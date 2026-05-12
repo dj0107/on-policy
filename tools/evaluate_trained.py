@@ -197,15 +197,16 @@ def get_policy_factory(baseline_name, checkpoint_dir=None, device='cpu'):
 
 
 def make_env(num_uavs, num_targets, baseline_name, aai_callback=None,
-             sigma_w_sq=5.0, **extra):
+             sigma_w_sq=5.0, randomize_aai=False, **extra):
     """
     baseline에 맞춰 use_aai/aai_callback을 결정.
-    
+
     mappo+aai     → use_aai=True, aai_callback=None  (heuristic AAI)
     mappo         → use_aai=False, aai_callback=None  (대조군: AAI 무사용)
     naive_greedy  → use_aai=True (assignment 사용)
     llm_aai       → aai_callback=user-provided  (env 내부 use_aai 무시되고 callback 사용)
-    
+
+    randomize_aai: 훈련 시에는 True였음 (도메인 랜덤화). 평가는 기본 False로 고정 시나리오 테스트.
     extra: 추가 환경 인자 (sigma_w_sq, num_critical_zones 등)
     """
     if baseline_name == 'mappo':
@@ -225,6 +226,7 @@ def make_env(num_uavs, num_targets, baseline_name, aai_callback=None,
         num_uavs=num_uavs, num_targets=num_targets,
         use_aai=use_aai, aai_callback=cb,
         sigma_w_sq=sigma_w_sq,
+        randomize_aai=randomize_aai,
         **extra
     )
 
@@ -250,7 +252,7 @@ def run_full_evaluation(args):
             print(f'[fatal] checkpoint load failed: {e}')
             return
 
-    common_kwargs = {'aai_callback': aai_callback}
+    common_kwargs = {'aai_callback': aai_callback, 'randomize_aai': args.randomize_aai}
 
     # ---- Sweep: num_uavs ----
     if args.sweep_uav:
@@ -355,6 +357,8 @@ def main():
     parser.add_argument('--sweep_tau', type=float, nargs='*', default=None)
     parser.add_argument('--save_episode', action='store_true')
     parser.add_argument('--episode_seeds', type=int, nargs='*', default=None)
+    parser.add_argument('--randomize_aai', action='store_true',
+                        help='훈련처럼 W/eps/p_ut를 매 step 랜덤화. 기본 False (고정 시나리오 평가).')
     args = parser.parse_args()
 
     run_full_evaluation(args)

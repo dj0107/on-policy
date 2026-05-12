@@ -21,8 +21,9 @@ from onpolicy.runner.shared.uav_runner import UAVRunner
 def make_train_env(all_args):
     def get_env_fn(rank):
         def init_env():
+            # Phase 4: randomize_aai=False 로 변경 — 논문 설계대로 heuristic AAI 신호 유지
             env = UAVTrackingEnv(num_uavs=all_args.num_agents, num_targets=2,
-                                 randomize_aai=True)  # AAI domain randomization → LLM 값 범위에 일반화
+                                 randomize_aai=False)
             env.seed(all_args.seed + rank * 1000)
             return env
         return init_env

@@ -180,12 +180,14 @@ class UAVTrackingEnv(gym.Env):
         self.d_min = 5.0
         self.map_min, self.map_max = -500.0, 500.0
 
-        # 보상 가중치 (재조정)
+        # 보상 가중치 (Phase 2 rebalance)
+        # lam3 10→1: 충돌 패널티가 다른 신호를 압도하던 문제 해결
+        # lam5는 r_untracked 항 제거로 더이상 사용 안 함 (prod_loss와 이중 페널티였음)
         self.lam1 = 1.0
         self.lam2 = 5.0
-        self.lam3 = 10.0
+        self.lam3 = 1.0
         self.lam4 = 1.0
-        self.lam5 = 5.0
+        self.lam5 = 5.0  # deprecated, kept for backward compat
 
         self.sigma_w_sq = sigma_w_sq
         self.sigma_r0_sq = 10.0
@@ -553,19 +555,17 @@ class UAVTrackingEnv(gym.Env):
         r_energy = -total_energy / 100.0
 
         r_tracking = 0.0
-        r_untracked = 0.0
         for t_idx, target in enumerate(self.targets):
             prod_loss = 1
-            n_detected = 0
             for uav in self.uavs:
                 a = uav.is_detected_per_target.get(t_idx, 0)
                 prod_loss *= (1 - a)
-                n_detected += a
+            # prod_loss=1 (아무도 탐지 못함) → lam2 패널티 = -5
+            # prod_loss=0 (1대 이상 탐지) → 0
+            # 별도의 r_untracked 항은 이중 페널티이므로 제거됨
             r_tracking -= target.W_kt * (
                 self.lam1 * (target.F_kt / 100.0) + self.lam2 * prod_loss
             )
-            if n_detected == 0:
-                r_untracked -= self.lam5
 
         r_collision = -self.lam3 * (n_collisions + boundary_violations)
 
@@ -575,7 +575,7 @@ class UAVTrackingEnv(gym.Env):
                 if alpha == 1 and u.last_R_c < self.R_c_threshold:
                     r_comm -= self.lam4 * (self.R_c_threshold - u.last_R_c) / self.R_c_threshold
 
-        return float(r_energy + r_tracking + r_collision + r_comm + r_untracked)
+        return float(r_energy + r_tracking + r_collision + r_comm)
 
     def _log_step(self, team_reward, n_collisions):
         log = self._episode_log

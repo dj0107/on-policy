@@ -115,7 +115,8 @@ def run_episode(env, policy_fn, log_episode=True):
     out = {
         'energy_per_step': np.array(energy_per_step),
         'energy_total': float(np.sum(energy_per_step)),
-        'reward_mean': float(np.mean(rewards)),
+        'reward_mean': float(np.sum(rewards)),
+        'reward_per_step': float(np.mean(rewards)),
         'detection_rate': float(detect_total / max(detect_count, 1)),
         'collision_count': int(collisions_total),
         'untracked_count': int(untracked_total),
@@ -171,17 +172,26 @@ def run_sweep(env_factory, policy_name, policy_factory, x_axis_label,
         per_seed_stats = []
         T = None
         all_e_per_step = []
+        skipped = False
         for seed in range(n_seeds):
+            if skipped:
+                break
             for ep in range(n_episodes_per_seed):
                 env = env_factory(x_val, seed * 1000 + ep)
                 env.seed(seed * 1000 + ep)
                 policy = policy_factory(env)
+                if policy is None:
+                    print(f'[SKIP] {policy_name} incompatible with {varying_arg}={x_val}: obs shape mismatch')
+                    skipped = True
+                    break
                 res = run_episode(env, policy, log_episode=False)
                 per_seed_stats.append(res)
                 all_e_per_step.append(res['energy_per_step'])
                 if T is None:
                     T = len(res['energy_per_step'])
-        
+        if skipped:
+            continue
+
         all_e = np.array(all_e_per_step)  # (n_seeds*n_eps, T)
         agg = {
             'method': policy_name,
@@ -204,7 +214,8 @@ def run_sweep(env_factory, policy_name, policy_factory, x_axis_label,
         }
         fname = os.path.join(save_dir, f'{policy_name}_{varying_arg}={x_val}.npz')
         np.savez(fname, **agg)
-        print(f'[saved] {fname}: E_total={agg["energy_total_mean"]:.1f}±{agg["energy_total_std"]:.1f}, '
+        print(f'[saved] {fname}: R_ep={agg["reward_mean"]:.1f}±{agg["reward_std"]:.1f}, '
+              f'E_total={agg["energy_total_mean"]:.1f}, '
               f'det={agg["detection_rate"]*100:.1f}%, col={agg["collision_count"]:.1f}')
 
 

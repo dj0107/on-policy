@@ -11,7 +11,9 @@ REM Config  (edit here)
 REM ============================================================
 set EXP_NAME=nalpari_v1
 set NUM_AGENTS=5
-set NUM_ENV_STEPS=18000000
+set KMP_DUPLICATE_LIB_OK=TRUE
+set PYTHONPATH=%cd%
+set NUM_ENV_STEPS=20000000
 set N_ROLLOUT=4
 set N_SEEDS=3
 set N_EPISODES=3
@@ -159,8 +161,13 @@ echo   [eval] hover
 python tools\evaluate_trained.py --baseline hover --out_dir "%EVAL_OUT%\hover" --sweep_uav %SWEEP_UAV% --sweep_target %SWEEP_TARGET% --sweep_noise %SWEEP_NOISE% --sweep_tau %SWEEP_TAU% --save_episode --episode_seeds %EPISODE_SEEDS% --n_seeds %N_SEEDS% --n_episodes %N_EPISODES%
 if errorlevel 1 ( echo [ERROR] hover eval failed. & goto :error )
 
-if not defined ANTHROPIC_API_KEY (
-    echo   [SKIP] llm_aai - ANTHROPIC_API_KEY not set.
+set LLM_KEY_SET=
+if defined ANTHROPIC_API_KEY set LLM_KEY_SET=1
+if defined GEMINI_API_KEY set LLM_KEY_SET=1
+if defined OPENAI_API_KEY set LLM_KEY_SET=1
+if defined DEEPSEEK_API_KEY set LLM_KEY_SET=1
+if not defined LLM_KEY_SET (
+    echo   [SKIP] llm_aai - no LLM API key set ^(ANTHROPIC_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY^).
     goto :merge
 )
 echo   [eval] llm_aai
