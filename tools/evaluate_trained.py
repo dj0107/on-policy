@@ -118,8 +118,9 @@ def load_mappo_actor(checkpoint_dir, env, device='cpu'):
     expected_obs = tuple(meta['obs_shape'])
     expected_act = tuple(meta['action_shape'])
     if tuple(obs_space.shape) != expected_obs:
-        print(f'[WARN] obs shape mismatch: env={obs_space.shape}, '
-              f'checkpoint={expected_obs}. evaluation 결과가 의미없을 수 있습니다.')
+        raise ValueError(
+            f'obs shape mismatch: env={obs_space.shape}, checkpoint={expected_obs}.'
+        )
     if tuple(act_space.shape) != expected_act:
         print(f'[WARN] action shape mismatch: env={act_space.shape}, '
               f'checkpoint={expected_act}.')
@@ -185,8 +186,12 @@ def get_policy_factory(baseline_name, checkpoint_dir=None, device='cpu'):
             raise ValueError(f'{baseline_name} requires --checkpoint_dir')
 
         def factory(env):
-            policy_fn, _ = load_mappo_actor(checkpoint_dir, env, device=device)
-            return policy_fn
+            try:
+                policy_fn, _ = load_mappo_actor(checkpoint_dir, env, device=device)
+                return policy_fn
+            except ValueError as e:
+                print(f'[SKIP] {e}')
+                return None
         return factory
     raise ValueError(f'unknown baseline: {baseline_name}')
 
