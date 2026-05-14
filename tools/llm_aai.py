@@ -60,7 +60,7 @@ AAI_OUTPUT_SCHEMA = {
                 "type": "object",
                 "required": ["p_ut"],
                 "properties": {
-                    "p_ut": {"type": "number", "minimum": 5.0, "maximum": 30.0}
+                    "p_ut": {"type": "number", "minimum": 0.3, "maximum": 3.0}
                 }
             }
         }
@@ -76,7 +76,7 @@ with three control parameters per target/UAV:
   target is more important (e.g. close to a risk zone or slow-moving).
 - epsilon_{k,t} (tracking accuracy threshold) ∈ [0.5, 20.0] — lower means we want
   tighter PCRLB on this target.
-- p_{u,t} (UAV transmit power, W) ∈ [5.0, 30.0] — higher gives stronger sensing
+- p_{u,t} (UAV transmit power, W) ∈ [0.3, 3.0] — higher gives stronger sensing
   but uses more energy.
 
 Decision principles:
@@ -203,11 +203,11 @@ def heuristic_aai_output(env) -> Dict[str, Any]:
         target = env.targets[t_idx]
         dist = np.linalg.norm(uav.pos - target.S_global[:2])
         if dist > 200.0:
-            p = 25.0
+            p = 2.0
         elif dist < 50.0:
-            p = 10.0
+            p = 0.5
         else:
-            p = 15.0
+            p = 1.0
         uavs_out.append({'p_ut': p})
 
     return {'targets': targets_out, 'uavs': uavs_out}
@@ -426,8 +426,8 @@ class LLMAAI:
         for u in uavs:
             if not isinstance(u, dict):
                 return None
-            p = float(u.get('p_ut', 15.0))
-            clean_uavs.append({'p_ut': float(np.clip(p, 5.0, 30.0))})
+            p = float(u.get('p_ut', 1.0))
+            clean_uavs.append({'p_ut': float(np.clip(p, 0.3, 3.0))})
 
         return {'targets': clean_targets, 'uavs': clean_uavs}
 

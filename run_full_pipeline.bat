@@ -13,7 +13,7 @@ set EXP_NAME=nalpari_v1
 set NUM_AGENTS=5
 set KMP_DUPLICATE_LIB_OK=TRUE
 set PYTHONPATH=%cd%
-set NUM_ENV_STEPS=2000000
+set NUM_ENV_STEPS=6000000
 set N_ROLLOUT=4
 set N_SEEDS=3
 set N_EPISODES=3
@@ -114,17 +114,18 @@ if exist "%TRAIN_DONE%" (
     echo [1/4] Skipping training ^(already complete^).
     goto :evaluation
 )
-REM 논문 충실 모드 — entropy_coef만 0.01→0.05로 올림 (정책 붕괴 방지)
-REM 나머지(lr, ppo_epoch, max_grad_norm)는 코드 기본값 그대로
-set "STABLE_OPTS=--entropy_coef 0.05"
+REM PPO 안정화 옵션 (Phase 5)
+REM entropy_coef 0.01→0.05 (붕괴 방지), ppo_epoch 15→5 (overfit 완화),
+REM num_mini_batch 1→4 (gradient 안정화)
+set "STABLE_OPTS=--entropy_coef 0.05 --ppo_epoch 5 --num_mini_batch 4"
 
 echo [1/4] Resuming training from checkpoint...
-set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 100 --use_eval %STABLE_OPTS% --resume_from %CHECKPOINT_DIR%"
+set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 300 --use_eval %STABLE_OPTS% --resume_from %CHECKPOINT_DIR%"
 goto :do_training
 
 :fresh_training
 echo [1/4] Starting fresh training... (this may take hours)
-set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 100 --use_eval %STABLE_OPTS%"
+set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 300 --use_eval %STABLE_OPTS%"
 goto :do_training
 
 :do_training

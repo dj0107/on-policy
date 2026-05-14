@@ -64,7 +64,7 @@ class UAV:
         self.v_max = max_speed
         self.energy = max_energy
         self.max_energy = max_energy
-        self.p_ut = 15.0
+        self.p_ut = 1.0
         self.tau_s_ratio = 0.5
         self.is_detected_per_target = {}
         self.last_e_tot = 0.0
@@ -77,8 +77,8 @@ class UAV:
 
         self.f_c = 2.4e9
         self.lam = 3e8 / self.f_c
-        self.G_t = 1.0    # 탐지 거리 ~307m (맵 30%), 의미 있는 탐지 도전
-        self.G_r = 30.0
+        self.G_t = 1.0
+        self.G_r = 30.0    # advisor 피드백 (p_ut=1, SNR=20dB, alt=15m)과 결합하여 detection 수평 ~103m
         self.sigma = 1.0
         self.N0 = 1e-14
         self.c1, self.c2 = 11.9, 0.13
@@ -151,13 +151,13 @@ class UAVTrackingEnv(gym.Env):
     def __init__(self, num_uavs=5, num_targets=2, dt=1.0,
                  use_aai=True, aai_callback=None,
                  randomize_aai=False,
-                 sigma_w_sq=5.0, log_episode=False,
+                 sigma_w_sq=0.5, log_episode=False,
                  num_critical_zones=2):
         super(UAVTrackingEnv, self).__init__()
         self.num_uavs = num_uavs
         self.num_targets = num_targets
         self.dt = dt
-        self.max_steps = 100
+        self.max_steps = 300
 
         self.use_aai = use_aai
         self.aai_callback = aai_callback
@@ -173,8 +173,8 @@ class UAVTrackingEnv(gym.Env):
         ]
         self.critical_zones = all_zones[:num_critical_zones]
 
-        # 13 dB → 선형
-        self.snr_threshold_dB = 13.0
+        # 20 dB → 선형
+        self.snr_threshold_dB = 20.0
         self.snr_threshold = 10 ** (self.snr_threshold_dB / 10.0)
         self.R_c_threshold = 1.218e6
         self.d_min = 5.0
@@ -197,7 +197,7 @@ class UAVTrackingEnv(gym.Env):
         self.sigma_theta_sq_floor = 1e-7
         self._precompute_ekf_matrices()
 
-        self.uavs = [UAV(i, [0, 0], altitude=100.0) for i in range(self.num_uavs)]
+        self.uavs = [UAV(i, [0, 0], altitude=15.0) for i in range(self.num_uavs)]
         self.targets = [Target(i, [0, 0], [0, 0]) for i in range(self.num_targets)]
         self.assignment = {u: 0 for u in range(self.num_uavs)}
 
@@ -272,7 +272,7 @@ class UAVTrackingEnv(gym.Env):
                 uav_positions[u_idx] = (target.pos + offset).astype(np.float32)
 
         self.uavs = [
-            UAV(i, uav_positions[i].tolist(), altitude=100.0)
+            UAV(i, uav_positions[i].tolist(), altitude=15.0)
             for i in range(self.num_uavs)
         ]
 
@@ -314,7 +314,7 @@ class UAVTrackingEnv(gym.Env):
                 t.epsilon_kt = 5.0
                 t.d_Z_kt = min(np.linalg.norm(t.S_global[:2] - cz) for cz in self.critical_zones)
             for u in self.uavs:
-                u.p_ut = 15.0
+                u.p_ut = 1.0
             self._build_assignment()
 
         if self.randomize_aai:
@@ -322,7 +322,7 @@ class UAVTrackingEnv(gym.Env):
                 t.W_kt = float(np.random.uniform(0.5, 3.5))
                 t.epsilon_kt = float(np.random.uniform(1.0, 10.0))
             for u in self.uavs:
-                u.p_ut = float(np.random.uniform(8.0, 30.0))
+                u.p_ut = float(np.random.uniform(0.3, 3.0))
 
     def _build_assignment(self):
         unassigned = list(range(self.num_uavs))
@@ -356,16 +356,17 @@ class UAVTrackingEnv(gym.Env):
                 target.W_kt = 1.0
                 target.epsilon_kt = 5.0
         self._build_assignment()
+        # p_ut: 1W 기준으로 비례 축소 (이전 10/15/25 → 0.5/1.0/2.0)
         for u_idx, uav in enumerate(self.uavs):
             target = self.targets[self.assignment[u_idx]]
             est_pos = target.S_global[:2]
             dist = np.linalg.norm(uav.pos - est_pos)
             if dist > 200.0:
-                uav.p_ut = 25.0
+                uav.p_ut = 2.0
             elif dist < 50.0:
-                uav.p_ut = 10.0
+                uav.p_ut = 0.5
             else:
-                uav.p_ut = 15.0
+                uav.p_ut = 1.0
 
     def _get_obs(self):
         POS_SCALE = 500.0
@@ -455,6 +456,10 @@ class UAVTrackingEnv(gym.Env):
         for t in self.targets:
             t.measurement_info = np.zeros((4, 4), dtype=np.float32)
 
+        # BUG FIX: stale 키 누적 방지 — 매 step UAV별 detection 상태 새로 시작
+        for uav in self.uavs:
+            uav.is_detected_per_target = {}
+
         for u_idx, uav in enumerate(self.uavs):
             t_idx = self.assignment[u_idx]
             target = self.targets[t_idx]
@@ -516,13 +521,21 @@ class UAVTrackingEnv(gym.Env):
             else:
                 uav.local_estimates[t_idx] = None
 
+        # 표준 PCRLB 재귀 (Tichavsky 1998 / Van Trees)
+        # 논문 식 (26)은 typo로 추정 — F_kt가 무한정 0에 수렴하는 문제 해결
+        # J_{k|k-1} = [F J_{k-1}⁻¹ Fᵀ + Q]⁻¹
+        # J_k       = J_{k|k-1} + Σ α HᵀR⁻¹H
         for target in self.targets:
-            prior_J = self.F_inv.T @ target.J_matrix @ self.F_inv + self.Q_inv
-            target.J_matrix = prior_J + target.measurement_info
             try:
-                PCRLB = np.linalg.inv(target.J_matrix)
+                P_post_prev = np.linalg.inv(target.J_matrix)
+                P_prior = self.F_mat @ P_post_prev @ self.F_mat.T + self.Q
+                prior_J = np.linalg.inv(P_prior + np.eye(4, dtype=np.float32) * 1e-6)
+                target.J_matrix = (prior_J + target.measurement_info).astype(np.float32)
+                PCRLB = np.linalg.inv(target.J_matrix + np.eye(4, dtype=np.float32) * 1e-6)
                 target.F_kt = float(min(np.trace(self.Lambda @ PCRLB @ self.Lambda.T), 1000.0))
             except np.linalg.LinAlgError:
+                # 수치적으로 불안정한 경우 reset
+                target.J_matrix = np.eye(4, dtype=np.float32) * 0.1
                 target.F_kt = 1000.0
 
     def _bs_fusion(self):

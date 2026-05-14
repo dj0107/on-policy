@@ -152,16 +152,18 @@ T=2일 때 17차원. **U와 무관** → 평가 시 다른 U에서도 actor 실�
 #### Share obs (global state): `3U + 8T` 차원
 Centralized critic 입력. U=5, T=2일 때 31차원.
 
-### 2.6 PCRLB / F_kt 계산 (line 495–502, paper 식 26-27)
+### 2.6 PCRLB / F_kt 계산 (line 495–502)
 
 ```python
-prior_J = self.F_inv.T @ target.J_matrix @ self.F_inv + self.Q_inv
+P_post_prev = np.linalg.inv(target.J_matrix)
+P_prior     = F · P_post_prev · Fᵀ + Q
+prior_J     = inv(P_prior)
 target.J_matrix = prior_J + target.measurement_info
-PCRLB = np.linalg.inv(target.J_matrix)
-target.F_kt = trace(Λ @ PCRLB @ Λ.T)
+PCRLB = inv(target.J_matrix)
+target.F_kt = trace(Λ · PCRLB · Λᵀ)
 ```
 
-paper 식과 정확히 일치한다. 단, 이 재귀는 `Q_inv`가 매 step 누적되어 J가 무한정 증가, PCRLB → 0, F_kt → 0이 된다. 모든 baseline에서 F_kt ≈ 0.01~0.03으로 saturate되어 **비교 지표로는 무력하다**. 대신 평가에서 실제 추정 오차 `tracking_err_mean`을 보조 metric으로 측정한다 (paper 정의는 그대로 유지).
+표준 PCRLB 재귀 사용 (자세한 사항은 섹션 12 참고).
 
 ### 2.7 AAI 헬퍼 (line 279–344)
 
@@ -410,8 +412,8 @@ MAPPO+AAI가 naive_greedy 대비:
 
 ## 10. 알려진 이슈
 
-### 10.1 F_kt = 0 saturation
-paper 공식상 `J_matrix`가 `Q_inv` 누적으로 무한정 증가 → PCRLB → 0. 모든 baseline에서 F_kt ≈ 0.01~0.03. 비교 무의미. 대체 metric `tracking_err_mean` 사용.
+### 10.1 F_kt 공식 수정
+초기 구현에서 F_kt가 모든 baseline에서 ≈0으로 saturate되어 변별력이 없었음 → 표준 PCRLB 공식으로 수정. 자세한 내용은 섹션 12 참고. 보조 metric인 `tracking_err_mean`은 계속 같이 측정한다.
 
 ### 10.2 sweep_target T≠2 skip
 학습은 T=2 고정이라 obs_shape=17. T=1 (obs=10) / T=3 (obs=31) 환경에선 actor 로드 실패. MAPPO 기반 baseline 자동 SKIP. naive/random/hover는 모든 T에서 평가.
@@ -443,3 +445,23 @@ set LLM_AAI_PROVIDER=gemini
 set LLM_AAI_MODEL=gemini-2.0-flash
 run_full_pipeline.bat
 ```
+
+---
+
+## 12. 논문에서 벗어난 부분 — F_kt 계산식
+
+논문 식 (26)을 그대로 구현했을 때 모든 baseline과 모든 시점에서 `F_kt ≈ 0`으로 saturate되어 추적 정확도를 비교하는 metric으로 작동하지 않았다. 이를 해결하기 위해 표준 PCRLB 재귀 형태로 다음과 같이 수정해서 구현했다.
+
+**논문 식 (26):**
+```
+J(S_{k,t}) = [F⁻¹]ᵀ J(S_{k,t-1}) F⁻¹ + Q⁻¹ + Σ α HᵀR⁻¹H
+```
+
+**구현 (표준 PCRLB):**
+```
+J(S_{k,t}|k-1) = [F · J(S_{k,t-1})⁻¹ · Fᵀ + Q]⁻¹
+J(S_{k,t})    = J(S_{k,t}|k-1) + Σ α HᵀR⁻¹H
+F_kt          = trace(Λ · J(S_{k,t})⁻¹ · Λᵀ)
+```
+
+이 형태는 측정이 들어오면 J가 증가(불확실성 감소), 측정이 없으면 J가 감소(불확실성 증가)하여 정책별 추적 성능 차이가 F_kt에 반영된다.
