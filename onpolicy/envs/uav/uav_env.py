@@ -180,15 +180,15 @@ class UAVTrackingEnv(gym.Env):
         self.d_min = 5.0
         self.map_min, self.map_max = -500.0, 500.0
 
-        # 보상 가중치 (Phase 2 v4 — dense proximity reward 추가)
-        # v3에서 entropy 붕괴 (-2.8). 원인: detect/no-detect 이진 신호로 cliff 형성
-        # → 거리 기반 dense 신호로 항상 gradient 제공
+        # 보상 가중치 (논문 충실 — value tuning만)
+        # lam2 5→10: 트래킹 신호 약간 강화
+        # lam3 10→1: 충돌 페널티가 다른 신호를 압도하던 문제 완화
+        # 나머지는 paper 기본값
         self.lam1 = 1.0
         self.lam2 = 10.0
         self.lam3 = 1.0
         self.lam4 = 1.0
         self.lam5 = 5.0
-        self.lam_prox = 3.0  # 거리 기반 reward 계수 (always-on signal)
 
         self.sigma_w_sq = sigma_w_sq
         self.sigma_r0_sq = 10.0
@@ -241,16 +241,39 @@ class UAVTrackingEnv(gym.Env):
         self.time_slot = 0
         self.bs_pos = np.array([0.0, 0.0], dtype=np.float32)
 
-        self.uavs = [
-            UAV(i, [np.random.uniform(-50, 50), np.random.uniform(-50, 50)], altitude=100.0)
-            for i in range(self.num_uavs)
-        ]
+        # 1) 타겟 먼저 생성 (랜덤 위치/속도)
         self.targets = [
             Target(i,
                    [np.random.uniform(self.map_min*0.6, self.map_max*0.6),
                     np.random.uniform(self.map_min*0.6, self.map_max*0.6)],
                    [np.random.uniform(-2, 2), np.random.uniform(-2, 2)])
             for i in range(self.num_targets)
+        ]
+
+        # 2) UAV를 타겟 근처에 배치 → 초기 탐지 보장 (한 번 놓치면 EKF 복원 불가)
+        #    각 타겟에 round-robin 할당: 첫 UAV는 바로 위 (0.01m 오프셋, angle singularity 회피)
+        #    나머지는 반경 8m 원형 분포 (d_min=5m 보다 큼)
+        uavs_per_target = {t: [] for t in range(self.num_targets)}
+        for u in range(self.num_uavs):
+            uavs_per_target[u % self.num_targets].append(u)
+
+        uav_positions = [None] * self.num_uavs
+        for t_idx, target in enumerate(self.targets):
+            group = uavs_per_target[t_idx]
+            n_around = max(1, len(group) - 1)
+            for idx_in_group, u_idx in enumerate(group):
+                if idx_in_group == 0:
+                    offset = np.array([0.01, 0.0], dtype=np.float32)
+                else:
+                    angle = 2.0 * math.pi * (idx_in_group - 1) / n_around
+                    radius = 8.0
+                    offset = np.array([radius * math.cos(angle),
+                                       radius * math.sin(angle)], dtype=np.float32)
+                uav_positions[u_idx] = (target.pos + offset).astype(np.float32)
+
+        self.uavs = [
+            UAV(i, uav_positions[i].tolist(), altitude=100.0)
+            for i in range(self.num_uavs)
         ]
 
         for target in self.targets:
@@ -578,17 +601,7 @@ class UAVTrackingEnv(gym.Env):
                 if alpha == 1 and u.last_R_c < self.R_c_threshold:
                     r_comm -= self.lam4 * (self.R_c_threshold - u.last_R_c) / self.R_c_threshold
 
-        # Dense proximity reward: 각 UAV가 자기 할당 타겟에 가까울수록 +
-        # detect 못해도 항상 gradient 존재 → policy collapse 방지
-        # 거리 500m (map 끝)이면 -lam_prox, 거리 0이면 0
-        r_proximity = 0.0
-        for u_idx, uav in enumerate(self.uavs):
-            t_idx = self.assignment.get(u_idx, 0)
-            target = self.targets[t_idx]
-            dist = float(np.linalg.norm(uav.pos - target.pos))  # 실제 위치 (privileged training)
-            r_proximity -= self.lam_prox * (dist / 500.0)
-
-        return float(r_energy + r_tracking + r_collision + r_comm + r_untracked + r_proximity)
+        return float(r_energy + r_tracking + r_collision + r_comm + r_untracked)
 
     def _log_step(self, team_reward, n_collisions):
         log = self._episode_log
