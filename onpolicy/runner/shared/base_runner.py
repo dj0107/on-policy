@@ -90,7 +90,11 @@ class Runner(object):
             self.trainer = TrainAlgo(self.all_args, self.policy, self.num_agents, device = self.device)
         else:
             self.trainer = TrainAlgo(self.all_args, self.policy, device = self.device)
-        
+
+        # restore optimizer + value_normalizer state (Phase 3: requires trainer to exist)
+        if self.model_dir is not None:
+            self.restore_trainer_state(self.model_dir)
+
         # buffer
         self.buffer = SharedReplayBuffer(self.all_args,
                                         self.num_agents,
@@ -141,7 +145,7 @@ class Runner(object):
         return train_infos
 
     def save(self, episode=0):
-        """Save policy's actor and critic networks."""
+        """Save policy's actor, critic, optimizer, and value_normalizer states."""
         if self.algorithm_name == "mat" or self.algorithm_name == "mat_dec":
             self.policy.save(self.save_dir, episode)
         else:
@@ -150,8 +154,17 @@ class Runner(object):
             policy_critic = self.trainer.policy.critic
             torch.save(policy_critic.state_dict(), str(self.save_dir) + "/critic.pt")
 
+            # Phase 3: save optimizer + value_normalizer for proper resume
+            torch.save(self.trainer.policy.actor_optimizer.state_dict(),
+                       str(self.save_dir) + "/actor_optim.pt")
+            torch.save(self.trainer.policy.critic_optimizer.state_dict(),
+                       str(self.save_dir) + "/critic_optim.pt")
+            vn = getattr(self.trainer, 'value_normalizer', None)
+            if vn is not None and hasattr(vn, 'state_dict'):
+                torch.save(vn.state_dict(), str(self.save_dir) + "/value_normalizer.pt")
+
     def restore(self, model_dir):
-        """Restore policy's networks from a saved model."""
+        """Restore policy's actor/critic networks from a saved model."""
         if self.algorithm_name == "mat" or self.algorithm_name == "mat_dec":
             self.policy.restore(model_dir)
         else:
@@ -160,6 +173,37 @@ class Runner(object):
             if not self.all_args.use_render:
                 policy_critic_state_dict = torch.load(str(self.model_dir) + '/critic.pt')
                 self.policy.critic.load_state_dict(policy_critic_state_dict)
+
+    def restore_trainer_state(self, model_dir):
+        """Phase 3: restore optimizer + value_normalizer state. Called after trainer is built."""
+        if self.algorithm_name == "mat" or self.algorithm_name == "mat_dec":
+            return  # MAT handles its own state internally
+        if self.all_args.use_render:
+            return
+
+        actor_optim_path = os.path.join(str(model_dir), 'actor_optim.pt')
+        critic_optim_path = os.path.join(str(model_dir), 'critic_optim.pt')
+        vn_path = os.path.join(str(model_dir), 'value_normalizer.pt')
+
+        if os.path.isfile(actor_optim_path):
+            self.trainer.policy.actor_optimizer.load_state_dict(torch.load(actor_optim_path))
+            print(f'[resume] actor_optimizer restored from {actor_optim_path}')
+        else:
+            print(f'[resume] WARN: no actor_optim.pt found — Adam momentum reset to 0.')
+
+        if os.path.isfile(critic_optim_path):
+            self.trainer.policy.critic_optimizer.load_state_dict(torch.load(critic_optim_path))
+            print(f'[resume] critic_optimizer restored from {critic_optim_path}')
+        else:
+            print(f'[resume] WARN: no critic_optim.pt found — Adam momentum reset to 0.')
+
+        vn = getattr(self.trainer, 'value_normalizer', None)
+        if vn is not None and hasattr(vn, 'load_state_dict'):
+            if os.path.isfile(vn_path):
+                vn.load_state_dict(torch.load(vn_path))
+                print(f'[resume] value_normalizer restored from {vn_path}')
+            else:
+                print(f'[resume] WARN: no value_normalizer.pt — running stats reset.')
 
     def log_train(self, train_infos, total_num_steps):
         """

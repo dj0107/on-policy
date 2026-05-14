@@ -1,0 +1,39 @@
+ Scenario uav_tracking Algo mappo Exp nalpari_v1 updates 4995/5000 episodes, total num timesteps 1998400/2000000, FPS 480.
+
+average episode rewards is -1525.9996337890625
+[1/4] Training completed.
+
+[2/4] Evaluating baselines...
+  [eval] mappo+aai
+G:\내 드라이브\!!!!!\소종\nalpari\tools\evaluate_trained.py:128: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  state_dict = torch.load(os.path.join(checkpoint_dir, 'actor.pt'),
+[ok] checkpoint loaded; obs_shape=(17,)
+[saved] evaluation\nalpari_v1\mappo_aai\sweep_uav\mappo+aai_U=3.npz: E_total=10074.7±285.6, det=71.7%, col=1.9
+[saved] evaluation\nalpari_v1\mappo_aai\sweep_uav\mappo+aai_U=5.npz: E_total=16480.3±885.8, det=70.6%, col=35.3
+[saved] evaluation\nalpari_v1\mappo_aai\sweep_uav\mappo+aai_U=7.npz: E_total=24852.6±1894.4, det=79.1%, col=107.2
+[saved] evaluation\nalpari_v1\mappo_aai\sweep_uav\mappo+aai_U=10.npz: E_total=33587.2±1915.8, det=54.9%, col=249.4
+[WARN] obs shape mismatch: env=(10,), checkpoint=(17,). evaluation 결과가 의미없을 수 있습니다.
+Traceback (most recent call last):
+  File "G:\내 드라이브\!!!!!\소종\nalpari\tools\evaluate_trained.py", line 360, in <module>
+    main()
+  File "G:\내 드라이브\!!!!!\소종\nalpari\tools\evaluate_trained.py", line 355, in main
+    run_full_evaluation(args)
+  File "G:\내 드라이브\!!!!!\소종\nalpari\tools\evaluate_trained.py", line 266, in run_full_evaluation
+    run_sweep(
+  File "G:\내 드라이브\!!!!!\소종\nalpari\tools\run_evaluation.py", line 178, in run_sweep
+    policy = policy_factory(env)
+             ^^^^^^^^^^^^^^^^^^^
+  File "G:\내 드라이브\!!!!!\소종\nalpari\tools\evaluate_trained.py", line 188, in factory
+    policy_fn, _ = load_mappo_actor(checkpoint_dir, env, device=device)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "G:\내 드라이브\!!!!!\소종\nalpari\tools\evaluate_trained.py", line 130, in load_mappo_actor
+    actor.load_state_dict(state_dict)
+  File "C:\Users\dongj\miniconda3\envs\ai_project\Lib\site-packages\torch\nn\modules\module.py", line 2584, in load_state_dict
+    raise RuntimeError(
+RuntimeError: Error(s) in loading state_dict for R_Actor:
+        size mismatch for base.feature_norm.weight: copying a param with shape torch.Size([17]) from checkpoint, the shape in current model is torch.Size([10]).
+        size mismatch for base.feature_norm.bias: copying a param with shape torch.Size([17]) from checkpoint, the shape in current model is torch.Size([10]).
+        size mismatch for base.mlp.fc1.0.weight: copying a param with shape torch.Size([64, 17]) from checkpoint, the shape in current model is torch.Size([64, 10]).
+[ERROR] mappo+aai eval failed. 
+
+[PIPELINE ABORTED] See error above.

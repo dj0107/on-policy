@@ -1,0 +1,21 @@
+{
+  "algorithm_name": "mappo",
+  "num_agents": 5,
+  "episode_length": 100,
+  "use_centralized_V": true,
+  "use_recurrent_policy": false,
+  "use_naive_recurrent_policy": false,
+  "hidden_size": 64,
+  "recurrent_N": 1,
+  "obs_shape": [
+    17
+  ],
+  "share_obs_shape": [
+    31
+  ],
+  "action_shape": [
+    2
+  ],
+  "action_low": -1.0,
+  "action_high": 1.0
+}
