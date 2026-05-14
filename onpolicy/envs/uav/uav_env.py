@@ -180,14 +180,15 @@ class UAVTrackingEnv(gym.Env):
         self.d_min = 5.0
         self.map_min, self.map_max = -500.0, 500.0
 
-        # 보상 가중치 (Phase 2 rebalance)
-        # lam3 10→1: 충돌 패널티가 다른 신호를 압도하던 문제 해결
-        # lam5는 r_untracked 항 제거로 더이상 사용 안 함 (prod_loss와 이중 페널티였음)
+        # 보상 가중치 (Phase 2 v4 — dense proximity reward 추가)
+        # v3에서 entropy 붕괴 (-2.8). 원인: detect/no-detect 이진 신호로 cliff 형성
+        # → 거리 기반 dense 신호로 항상 gradient 제공
         self.lam1 = 1.0
-        self.lam2 = 5.0
+        self.lam2 = 10.0
         self.lam3 = 1.0
         self.lam4 = 1.0
-        self.lam5 = 5.0  # deprecated, kept for backward compat
+        self.lam5 = 5.0
+        self.lam_prox = 3.0  # 거리 기반 reward 계수 (always-on signal)
 
         self.sigma_w_sq = sigma_w_sq
         self.sigma_r0_sq = 10.0
@@ -555,17 +556,19 @@ class UAVTrackingEnv(gym.Env):
         r_energy = -total_energy / 100.0
 
         r_tracking = 0.0
+        r_untracked = 0.0
         for t_idx, target in enumerate(self.targets):
             prod_loss = 1
+            n_detected = 0
             for uav in self.uavs:
                 a = uav.is_detected_per_target.get(t_idx, 0)
                 prod_loss *= (1 - a)
-            # prod_loss=1 (아무도 탐지 못함) → lam2 패널티 = -5
-            # prod_loss=0 (1대 이상 탐지) → 0
-            # 별도의 r_untracked 항은 이중 페널티이므로 제거됨
+                n_detected += a
             r_tracking -= target.W_kt * (
                 self.lam1 * (target.F_kt / 100.0) + self.lam2 * prod_loss
             )
+            if n_detected == 0:
+                r_untracked -= self.lam5
 
         r_collision = -self.lam3 * (n_collisions + boundary_violations)
 
@@ -575,7 +578,17 @@ class UAVTrackingEnv(gym.Env):
                 if alpha == 1 and u.last_R_c < self.R_c_threshold:
                     r_comm -= self.lam4 * (self.R_c_threshold - u.last_R_c) / self.R_c_threshold
 
-        return float(r_energy + r_tracking + r_collision + r_comm)
+        # Dense proximity reward: 각 UAV가 자기 할당 타겟에 가까울수록 +
+        # detect 못해도 항상 gradient 존재 → policy collapse 방지
+        # 거리 500m (map 끝)이면 -lam_prox, 거리 0이면 0
+        r_proximity = 0.0
+        for u_idx, uav in enumerate(self.uavs):
+            t_idx = self.assignment.get(u_idx, 0)
+            target = self.targets[t_idx]
+            dist = float(np.linalg.norm(uav.pos - target.pos))  # 실제 위치 (privileged training)
+            r_proximity -= self.lam_prox * (dist / 500.0)
+
+        return float(r_energy + r_tracking + r_collision + r_comm + r_untracked + r_proximity)
 
     def _log_step(self, team_reward, n_collisions):
         log = self._episode_log

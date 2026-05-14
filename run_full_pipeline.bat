@@ -13,7 +13,7 @@ set EXP_NAME=nalpari_v1
 set NUM_AGENTS=5
 set KMP_DUPLICATE_LIB_OK=TRUE
 set PYTHONPATH=%cd%
-set NUM_ENV_STEPS=20000000
+set NUM_ENV_STEPS=8000000
 set N_ROLLOUT=4
 set N_SEEDS=3
 set N_EPISODES=3
@@ -114,13 +114,16 @@ if exist "%TRAIN_DONE%" (
     echo [1/4] Skipping training ^(already complete^).
     goto :evaluation
 )
+REM PPO 안정화 옵션 (Phase 2 v4): + entropy_coef 0.05 (탐색 보장), ppo_epoch 5→4
+set "STABLE_OPTS=--lr 1e-4 --critic_lr 1e-4 --ppo_epoch 4 --max_grad_norm 0.5 --entropy_coef 0.05"
+
 echo [1/4] Resuming training from checkpoint...
-set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 100 --use_eval --resume_from %CHECKPOINT_DIR%"
+set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 100 --use_eval %STABLE_OPTS% --resume_from %CHECKPOINT_DIR%"
 goto :do_training
 
 :fresh_training
 echo [1/4] Starting fresh training... (this may take hours)
-set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 100 --use_eval"
+set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 100 --use_eval %STABLE_OPTS%"
 goto :do_training
 
 :do_training

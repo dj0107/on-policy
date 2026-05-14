@@ -80,6 +80,8 @@ def load_sweep_dir(sweep_dir):
             'untracked_count':  float(d['untracked_count']),
             'F_kt_mean':        float(d['F_kt_mean']),
             'reward_mean':      float(d['reward_mean']),
+            'tracking_err_mean':           float(d['tracking_err_mean']) if 'tracking_err_mean' in d.files else float('nan'),
+            'tracking_err_detected_mean':  float(d['tracking_err_detected_mean']) if 'tracking_err_detected_mean' in d.files else float('nan'),
         })
     # x로 정렬
     for m in results_by_method:
@@ -94,7 +96,7 @@ def plot_sweep_comparison(sweep_dir, out_path, x_label=None, title=None):
         print(f'[skip] no data in {sweep_dir}')
         return
 
-    fig, axes = plt.subplots(1, 3, figsize=(14, 4.2))
+    fig, axes = plt.subplots(1, 4, figsize=(18, 4.2))
 
     # 패널 1: total energy
     ax = axes[0]
@@ -135,8 +137,23 @@ def plot_sweep_comparison(sweep_dir, out_path, x_label=None, title=None):
     ax2.tick_params(axis='y', colors='#666')
     ax.legend(loc='lower left', fontsize=9)
 
-    # 패널 3: per-step energy curve (한 condition, 모든 method 비교)
+    # 패널 3: tracking error (실제 ||S_est - S_true||) — F_kt가 saturation되는 한계 보완
     ax = axes[2]
+    for method, runs in data.items():
+        style = METHOD_STYLE.get(method, {'color': 'k', 'marker': 'o',
+                                          'linestyle': '-', 'label': method})
+        xs = [r['x'] for r in runs]
+        ys = [r['tracking_err_mean'] for r in runs]
+        ax.plot(xs, ys, color=style['color'], marker=style['marker'],
+                linestyle=style['linestyle'], label=style['label'],
+                markersize=6, linewidth=1.5)
+    ax.set_xlabel(x_label or runs[0]['x_label'])
+    ax.set_ylabel(r'Mean $\|S_{est} - S_{true}\|$  [m]')
+    ax.set_title('Estimation error', fontweight='semibold')
+    ax.legend(loc='best', fontsize=9)
+
+    # 패널 4: per-step energy curve (한 condition, 모든 method 비교)
+    ax = axes[3]
     if len(data):
         # 중간 condition을 골라 보여줌
         any_method = next(iter(data))

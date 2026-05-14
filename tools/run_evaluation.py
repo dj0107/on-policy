@@ -92,7 +92,10 @@ def run_episode(env, policy_fn, log_episode=True):
     collisions_total = 0
     untracked_total = 0
     F_kt_total = []
-    
+    # 실제 추정 오차 (BFIM이 saturation되는 F_kt와 별개로 정책 차이를 보여주는 지표)
+    tracking_err_per_step = []  # 각 step의 평균 ||S_est - S_true||
+    tracking_err_detected = []  # 탐지된 상태에서만의 오차 (탐지 안 되면 무한 오차 발산하므로 분리)
+
     done = False
     while not done:
         action = policy_fn(obs)
@@ -110,8 +113,22 @@ def run_episode(env, policy_fn, log_episode=True):
             if n_det == 0:
                 untracked_total += 1
         F_kt_total.append([t.F_kt for t in env.targets])
+
+        # tracking error: ||true_pos - est_pos|| (전체 / 탐지된 것만)
+        step_errs = []
+        step_errs_det = []
+        for k_idx, target in enumerate(env.targets):
+            err = float(np.linalg.norm(target.pos - target.S_global[:2]))
+            step_errs.append(err)
+            n_det = sum(u.is_detected_per_target.get(k_idx, 0) for u in env.uavs)
+            if n_det > 0:
+                step_errs_det.append(err)
+        tracking_err_per_step.append(np.mean(step_errs))
+        if step_errs_det:
+            tracking_err_detected.append(np.mean(step_errs_det))
+
         done = bool(dones[0])
-    
+
     out = {
         'energy_per_step': np.array(energy_per_step),
         'energy_total': float(np.sum(energy_per_step)),
@@ -121,6 +138,8 @@ def run_episode(env, policy_fn, log_episode=True):
         'collision_count': int(collisions_total),
         'untracked_count': int(untracked_total),
         'F_kt_mean': float(np.mean(F_kt_total)),
+        'tracking_err_mean': float(np.mean(tracking_err_per_step)),
+        'tracking_err_detected_mean': float(np.mean(tracking_err_detected)) if tracking_err_detected else float('nan'),
     }
     if log_episode:
         out['log'] = env.get_episode_log()
@@ -206,6 +225,10 @@ def run_sweep(env_factory, policy_name, policy_factory, x_axis_label,
             'energy_per_step_std':  all_e.std(axis=0),
             'F_kt_mean': float(np.mean([s['F_kt_mean'] for s in per_seed_stats])),
             'F_kt_std':  float(np.std([s['F_kt_mean'] for s in per_seed_stats])),
+            'tracking_err_mean': float(np.mean([s['tracking_err_mean'] for s in per_seed_stats])),
+            'tracking_err_std':  float(np.std([s['tracking_err_mean'] for s in per_seed_stats])),
+            'tracking_err_detected_mean': float(np.nanmean([s['tracking_err_detected_mean'] for s in per_seed_stats])),
+            'tracking_err_detected_std':  float(np.nanstd([s['tracking_err_detected_mean'] for s in per_seed_stats])),
             'detection_rate': float(np.mean([s['detection_rate'] for s in per_seed_stats])),
             'collision_count': float(np.mean([s['collision_count'] for s in per_seed_stats])),
             'untracked_count': float(np.mean([s['untracked_count'] for s in per_seed_stats])),
