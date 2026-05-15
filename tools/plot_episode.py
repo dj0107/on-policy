@@ -137,7 +137,7 @@ def _draw_map_layout(ax, log, env_meta, time_range=None):
                                 fill=False, edgecolor='#444',
                                 linewidth=1.2, linestyle='-', zorder=1))
 
-    # 범례 (외부)
+    # 범례 — axes 바로 위(외부)에 가로 배치
     handles = [
         Line2D([0], [0], marker='^', color='w', markerfacecolor='#1f5fa8',
                markersize=10, label='UAV (final)'),
@@ -150,8 +150,11 @@ def _draw_map_layout(ax, log, env_meta, time_range=None):
                markersize=9, label='Base station'),
         mpatches.Patch(color=RISK_COLOR, alpha=0.45, label='Risk zone'),
     ]
-    ax.legend(handles=handles, loc='upper right', fontsize=8.5,
-              framealpha=0.92, ncol=1)
+    # 범례를 axes 외부 하단(x축 아래)에 배치 — 타이틀과 겹침 방지
+    ax.legend(handles=handles,
+              bbox_to_anchor=(0.0, -0.12, 1.0, 0.08),
+              loc='upper left', mode='expand',
+              ncol=3, fontsize=7.5, framealpha=0.92, borderaxespad=0)
 
 
 def _draw_energy_timeline(ax, log):
@@ -177,19 +180,22 @@ def _draw_energy_timeline(ax, log):
 
 
 def _draw_F_kt_timeline(ax, log, env_meta):
-    """Tracking 정확도 (F_kt) 시계열."""
+    """Tracking quality (F_kt → 높을수록 좋은 quality score로 변환)."""
     F = log['F_kt']  # (T, K)
     T, K = F.shape
     ts = np.arange(T)
+    # quality = (1 - F_kt/1000) * 100  →  100%=완벽, 0%=추적 불가
+    quality = (1.0 - np.clip(F, 0.0, 1000.0) / 1000.0) * 100.0
     tgt_colors = _make_target_colors(K)
     for k in range(K):
-        ax.plot(ts, F[:, k], color=tgt_colors[k], linewidth=1.6,
+        ax.plot(ts, quality[:, k], color=tgt_colors[k], linewidth=1.6,
                 label=f'Target {k}')
     ax.set_xlabel('Time step  $t$')
-    ax.set_ylabel(r'$F_{k,t}$  (PCRLB trace)')
-    ax.set_title('Tracking accuracy', fontweight='semibold')
+    ax.set_ylabel('Tracking quality  [%]')
+    ax.set_title('Tracking quality', fontweight='semibold')
+    ax.set_ylim(0, 105)
     ax.grid(True, alpha=0.25, linestyle='--')
-    ax.legend(loc='upper right', fontsize=9)
+    ax.legend(loc='lower right', fontsize=9)
 
 
 def _draw_aai_panel(ax_W, ax_p, ax_alpha, log, env_meta):

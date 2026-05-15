@@ -188,7 +188,8 @@ class UAVTrackingEnv(gym.Env):
         self.lam2 = 10.0
         self.lam3 = 1.0
         self.lam4 = 1.0
-        self.lam5 = 5.0
+        self.lam5 = 15.0   # 5 → 15: 미탐지 페널티 강화
+        self.lam6 = 2.0    # 거리 기반 항법 보상 (밀도 높은 gradient 제공)
 
         self.sigma_w_sq = sigma_w_sq
         self.sigma_r0_sq = 10.0
@@ -392,13 +393,15 @@ class UAVTrackingEnv(gym.Env):
         for u_idx, uav in enumerate(self.uavs):
             obs = list(uav.pos / POS_SCALE)
             obs.append(uav.energy / E_SCALE)
-            for target in self.targets:
+            for k_idx, target in enumerate(self.targets):
                 delta_q = (target.S_global[:2] - uav.pos) / POS_SCALE
                 obs.extend(delta_q)
                 v_clipped = np.clip(target.S_global[2:], -V_SCALE, V_SCALE)
                 obs.extend(v_clipped / V_SCALE)
                 obs.append(target.W_kt / 5.0)
                 obs.append(target.epsilon_kt / 10.0)
+                # 직전 step 탐지 여부 — 에이전트가 현재 위치로 탐지 가능 여부 직접 피드백
+                obs.append(float(uav.is_detected_per_target.get(k_idx, 0)))
             t_idx = self.assignment.get(u_idx, 0)
             for k in range(self.num_targets):
                 obs.append(1.0 if k == t_idx else 0.0)
@@ -614,7 +617,16 @@ class UAVTrackingEnv(gym.Env):
                 if alpha == 1 and u.last_R_c < self.R_c_threshold:
                     r_comm -= self.lam4 * (self.R_c_threshold - u.last_R_c) / self.R_c_threshold
 
-        return float(r_energy + r_tracking + r_collision + r_comm + r_untracked)
+        # 항법 shaping: 담당 타겟과의 거리에 비례한 dense reward
+        # 탐지 반경(~103m)의 2배인 200m 내에서 선형 증가 → 탐지 없어도 접근 gradient 제공
+        r_approach = 0.0
+        for u_idx, uav in enumerate(self.uavs):
+            t_idx = self.assignment[u_idx]
+            target = self.targets[t_idx]
+            dist = np.linalg.norm(uav.pos - target.pos)
+            r_approach += max(0.0, 1.0 - dist / 200.0) * self.lam6
+
+        return float(r_energy + r_tracking + r_collision + r_comm + r_untracked + r_approach)
 
     def _log_step(self, team_reward, n_collisions):
         log = self._episode_log
