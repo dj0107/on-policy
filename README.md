@@ -62,11 +62,11 @@ nalpari/
 
 #### `UAVTrackingEnv` (line 148–) — gym.Env
 주요 인자:
-- `num_uavs=5`, `num_targets=2`, `dt=1.0`, `max_steps=100`
+- `num_uavs=5`, `num_targets=2`, `dt=1.0`, `max_steps=150`
 - `use_aai=True` → heuristic AAI 활성화
 - `aai_callback=None` → 평가 시 LLM AAI callback 주입 hook
 - `randomize_aai=False` → 논문 설계 그대로
-- `sigma_w_sq=5.0` → 프로세스 노이즈 분산 (sweep_noise에서 가변)
+- `sigma_w_sq=0.1` → 프로세스 노이즈 분산 (sweep_noise에서 가변)
 - `num_critical_zones=2` → 위험구역 개수
 
 ### 2.2 초기화 (`reset`, line 238–) — UAV를 타겟 근처에 배치
@@ -75,36 +75,31 @@ nalpari/
 한 번 놓치면 위치 정보 자체가 없어 복원 불가능하므로, 초기 detection을 강제로 보장한다.
 
 ```python
-# 1) 타겟 랜덤 생성
+# 1) 타겟 랜덤 생성 (맵 60% 범위, 초기 속도 ±2 m/s)
 # 2) UAV를 round-robin으로 타겟에 할당
 #    U=5, T=2: uavs_per_target = {0: [u0, u2, u4], 1: [u1, u3]}
-# 3) 각 타겟마다:
-#    - 첫 UAV: 타겟 바로 위 (x+0.01, y) — angle singularity 회피용 미세 오프셋
-#    - 나머지: 반경 8m 원형 분포, 등간격 각도
+# 3) 각 UAV: 담당 타겟 기준 10~80m 반경 랜덤 배치
+#    - 30회 재시도로 d_min=5m 충돌 회피
 ```
 
-| 케이스 | 타겟당 UAV | 인접 거리 | d_min=5m 충족 |
-|---|---|---|---|
-| U=5, T=2 | 3 / 2 | 8m | ✓ |
-| U=10, T=2 | 5 / 5 | 11.3m | ✓ |
-| U=10, T=1 | 10 | 5.47m | ✓ (간신히) |
+UAV 고도 H=15m. 탐지 가능 수평 거리 ≈ 103m이므로 80m 이내 배치 시 초기 탐지 보장.
 
-UAV 고도 H=100m → 수평 0.01m면 3D 거리 ≈ 100m. 이 거리에서 SNR > threshold가 성립하도록 sensing model이 설계되어 있다.
+### 2.3 Reward 가중치
 
-### 2.3 Reward 가중치 (논문 충실)
-
-[uav_env.py:183-191](onpolicy/envs/uav/uav_env.py#L183-L191)
+[uav_env.py:187-193](onpolicy/envs/uav/uav_env.py#L187-L193)
 ```python
-self.lam1 = 1.0     # F_kt 계수
-self.lam2 = 10.0    # prod_loss 계수 (탐지 실패 신호)
-self.lam3 = 1.0     # 충돌 페널티
-self.lam4 = 1.0     # 통신 페널티
-self.lam5 = 5.0     # untracked 추가 페널티
+self.lam1 = 2.0    # F_kt 계수
+self.lam2 = 15.0   # prod_loss 계수 (swarm 전체 실패 페널티)
+self.lam3 = 0.5    # 충돌/경계 페널티
+self.lam4 = 0.0    # 통신 페널티 (삭제됨)
+self.lam5 = 8.0    # untracked 추가 페널티
+self.lam6 = 8.0    # r_approach shaping 계수 (논문에 없음)
+self.lam7 = 15.0   # r_detect 양수 보상 계수 (논문에 없음)
 ```
 
-원본 paper 값에서 `lam2: 5→10`, `lam3: 10→1` 두 값만 튜닝했다 (구조는 동일).
+lam6/lam7은 논문 원본에 없는 추가 항목 — 재탐색 gradient와 탐지 성공 양수 보상을 제공한다 (섹션 2.4 참고).
 
-### 2.4 `_calculate_team_reward` (line 551–) — 항목별 의미
+### 2.4 `_calculate_team_reward` (line 594–) — 항목별 의미
 
 ```python
 r_energy = -total_energy / 100.0
@@ -123,31 +118,42 @@ for t_idx, target in enumerate(self.targets):
         self.lam1 * (target.F_kt / 100.0) + self.lam2 * prod_loss
     )
     if n_detected == 0:
-        r_untracked -= self.lam5
+        r_untracked -= self.lam5   # 완전 미탐지: -8 per target
+    else:
+        r_detect += self.lam7      # 탐지 성공: +15 per target
 ```
-- `prod_loss=1` (아무도 탐지 못함) → W×10 만큼 페널티
-- `prod_loss=0` (한 대 이상 탐지) → F_kt 항만 (사실상 0)
-- 완전 미탐지면 추가 -5
+- `prod_loss=1` (아무도 탐지 못함) → W×lam2 페널티 + r_untracked
+- `prod_loss=0` (한 대 이상 탐지) → F_kt 항만 + r_detect
 
 ```python
 r_collision = -self.lam3 * (n_collisions + boundary_violations)
 ```
-충돌/경계 위반 1회당 -1.
+충돌/경계 위반 1회당 -0.5.
 
 ```python
-r_comm = ...  # 탐지 중이나 통신 품질 낮을 때 페널티
+r_comm = 0.0  # lam4=0이므로 항상 0 (통신 페널티 삭제됨)
 ```
 
-총합: `r_energy + r_tracking + r_untracked + r_collision + r_comm`
+```python
+r_approach = 0.0
+for t_idx, target in enumerate(self.targets):
+    min_dist = min(np.linalg.norm(uav.pos - target.pos) for uav in self.uavs)
+    r_approach += max(0.0, 1.0 - min_dist / 200.0) * self.lam6
+```
+각 타겟에 가장 가까운 UAV 거리 기반 shaping. 200m 이내에 접근할수록 +보상.  
+탐지가 끊겼을 때 UAV가 타겟 방향으로 이동하도록 유도하는 재탐색 gradient.
 
-### 2.5 Observation (line 346–381)
+총합: `r_energy + r_tracking + r_untracked + r_detect + r_collision + r_comm + r_approach`
 
-#### Local obs (per UAV): `3 + 7T` 차원
+### 2.5 Observation (line 373–410)
+
+#### Local obs (per UAV): `3 + 8T` 차원
 - UAV 위치 (2), 에너지 (1)
-- 각 타겟별: delta (2) + vel (2) + W (1) + eps (1) = 6 × T
+- 각 타겟별: delta (2) + vel (2) + W (1) + eps (1) + alpha (1) = 7 × T
 - assignment one-hot (T)
 
-T=2일 때 17차원. **U와 무관** → 평가 시 다른 U에서도 actor 실행 가능.
+T=2일 때 **19차원**. **U와 무관** → 평가 시 다른 U에서도 actor 실행 가능.  
+`alpha`: 직전 step에서 이 UAV가 해당 타겟을 탐지했는지 (0/1). 탐지 가능 범위 여부를 직접 피드백.
 
 #### Share obs (global state): `3U + 8T` 차원
 Centralized critic 입력. U=5, T=2일 때 31차원.
@@ -199,7 +205,7 @@ target.F_kt = trace(Λ · PCRLB · Λᵀ)
 ```python
 episodes = int(num_env_steps) // episode_length // n_rollout_threads
 ```
-NUM_ENV_STEPS=2000000, ep_len=100, n_threads=4 → **5000 에피소드** (가망 확인용).
+NUM_ENV_STEPS=6000000, ep_len=150, n_threads=4 → **10000 에피소드**.
 
 매 episode 후 모델 저장 (save_interval=1, 덮어쓰기).
 
@@ -296,7 +302,7 @@ CLI `--randomize_aai`로 분포 명시 (기본 False).
 ```bat
 set EXP_NAME=nalpari_v1
 set NUM_AGENTS=5
-set NUM_ENV_STEPS=2000000   :: 5000 에피소드 — 가망 확인용
+set NUM_ENV_STEPS=6000000   :: 10000 에피소드
 set N_ROLLOUT=4
 set N_SEEDS=3
 set N_EPISODES=3
@@ -304,14 +310,14 @@ set KMP_DUPLICATE_LIB_OK=TRUE
 set PYTHONPATH=%cd%
 ```
 
-### 6.2 PPO 옵션 (논문 충실 모드)
+### 6.2 PPO 옵션
 ```bat
-set "STABLE_OPTS=--entropy_coef 0.05"
+set "STABLE_OPTS=--lr 1e-4 --entropy_coef 0.05 --ppo_epoch 5 --num_mini_batch 4"
 ```
-나머지 (lr, ppo_epoch, max_grad_norm)는 코드 기본값. `entropy_coef`만 0.01→0.05로 올려 정책 붕괴 방지.
+run4에서 lr=1e-4, ppo_epoch=5 조합이 21% 달성하여 확정.
 
 ### 6.3 흐름
-1. 체크포인트 검출: `run1/models/actor.pt` + `training_done.txt` 존재 여부로 학습/평가/archive 결정
+1. 체크포인트 검출: `latest/models/actor.pt` + `training_done.txt` 존재 여부로 학습/평가/archive 결정
 2. 메뉴 (choice 1/2):
    - `[1]` 학습 재개 또는 평가만
    - `[2]` 기존 결과 archive 후 fresh 학습
@@ -329,25 +335,25 @@ ANTHROPIC / GEMINI / OPENAI / DEEPSEEK 중 하나라도 정의되어 있으면 l
 
 ### 7.1 Reward 함수 변천 (uav_env.py)
 
-| 버전 | lam2 | lam3 | lam5 | r_proximity | 결과 |
-|---|---|---|---|---|---|
-| Original | 5 | 10 | 5 | - | 충돌 페널티가 dominant, 추적 학습 안 됨 |
-| v1 | 5 | 1 | 0 (제거) | - | 추적 신호 더 약해짐 |
-| v2 | 20 | 1 | 10 | - | reward 폭주, entropy 2.8→20 폭발 |
-| v3 | 10 | 1 | 5 | - | entropy 2.8→-2.8 붕괴, deterministic화 |
-| v4 | 10 | 1 | 5 | **+ lam_prox=3** | proximity reward로 학습 신호 강화 시도 |
-| **현재 (논문 충실)** | **10** | **1** | **5** | **제거** | r_proximity는 paper에 없으므로 revert |
+| 버전 | lam1 | lam2 | lam3 | lam4 | lam5 | lam6 | lam7 | det% | 비고 |
+|---|---|---|---|---|---|---|---|---|---|
+| run1 | 1 | 10 | 1 | 1 | 5 | 5 | - | 8.1% | obs=17, lr=5e-4 |
+| run2 | 1 | 10 | 1 | 1 | 5 | 5 | - | 13.8% | obs=19 (alpha 추가) |
+| run3 | 1 | 10 | 1 | 1 | 5 | 5 | - | 12.1% | per-target approach |
+| run4 | 1 | 10 | 1 | 1 | 5 | 5 | - | 21.0% | lr=1e-4, ppo_epoch=5 |
+| run1* | 1 | 10 | 0.5 | 1 | 5 | 5 | 20 | 28.6% | 2M steps, lam7 신규 |
+| **현재** | **2** | **15** | **0.5** | **0** | **8** | **8** | **15** | ≥70% 목표 | lam4 삭제 |
 
 ### 7.2 PPO 하이퍼파라미터 변천
 
 | 버전 | lr | ppo_epoch | entropy_coef | max_grad_norm |
 |---|---|---|---|---|
 | Original | 5e-4 | 15 | 0.01 | 10 |
-| v3 시도 | 1e-4 | 5 | 0.01 | 0.5 |
-| v4 시도 | 1e-4 | 4 | 0.05 | 0.5 |
-| **현재** | **5e-4** | **15** | **0.05** | **10** |
+| run1~3 | 5e-4 | 15 | 0.05 | 10 |
+| run4 시도 | 1e-4 | 5 | 0.05 | 10 |
+| **현재** | **1e-4** | **5** | **0.05** | **10** |
 
-`entropy_coef`만 0.01→0.05로 조정. 나머지는 원래 default로 복귀.
+run4에서 lr=1e-4 + ppo_epoch=5 조합이 21% 달성 → 확정.
 
 ### 7.3 초기화 변천 (reset)
 
@@ -367,7 +373,7 @@ ANTHROPIC / GEMINI / OPENAI / DEEPSEEK 중 하나라도 정의되어 있으면 l
 
 ### 8.1 tensorboard
 ```cmd
-tensorboard --logdir onpolicy\scripts\results\UAV\uav_tracking\mappo\nalpari_v1\run1\logs
+tensorboard --logdir onpolicy\scripts\results\UAV\uav_tracking\mappo\nalpari_v1\latest\logs
 ```
 
 ### 8.2 정상 학습 신호
@@ -416,7 +422,7 @@ MAPPO+AAI가 naive_greedy 대비:
 초기 구현에서 F_kt가 모든 baseline에서 ≈0으로 saturate되어 변별력이 없었음 → 표준 PCRLB 공식으로 수정. 자세한 내용은 섹션 12 참고. 보조 metric인 `tracking_err_mean`은 계속 같이 측정한다.
 
 ### 10.2 sweep_target T≠2 skip
-학습은 T=2 고정이라 obs_shape=17. T=1 (obs=10) / T=3 (obs=31) 환경에선 actor 로드 실패. MAPPO 기반 baseline 자동 SKIP. naive/random/hover는 모든 T에서 평가.
+학습은 T=2 고정이라 obs_shape=19. T=1 (obs=11) / T=3 (obs=27) 환경에선 actor 로드 실패. MAPPO 기반 baseline 자동 SKIP. naive/random/hover는 모든 T에서 평가.
 
 ### 10.3 초기화 의존성
 새 reset 로직은 UAV를 타겟 근처에 강제 배치한다. 만약 베이스라인(naive)이 너무 잘 나오면 이 강제 배치 때문일 수 있다. 비교 의도가 "초기 detection 보장 상태에서 누가 잘 추적하는가"인지 명확히 해야 한다.
@@ -464,4 +470,4 @@ J(S_{k,t})    = J(S_{k,t}|k-1) + Σ α HᵀR⁻¹H
 F_kt          = trace(Λ · J(S_{k,t})⁻¹ · Λᵀ)
 ```
 
-이 형태는 측정이 들어오면 J가 증가(불확실성 감소), 측정이 없으면 J가 감소(불확실성 증가)하여 정책별 추적 성능 차이가 F_kt에 반영된다.
+Λ = diag([1,1,0,0]) — 위치 성분만 (속도 오차 제외). 이 형태는 측정이 들어오면 J가 증가(불확실성 감소), 측정이 없으면 J가 감소(불확실성 증가)하여 정책별 추적 성능 차이가 F_kt에 반영된다.

@@ -1,0 +1,314 @@
+======================================================================
+  MAPPO+AAI  seed=42  per-step reward log
+  evaluation/nalpari_v1/mappo_aai/episodes/mappo+aai_seed42.npz
+======================================================================
+  Total steps : 300  (index 0 = initial state, no reward)
+  Mean reward : -42.607
+  Min  reward : -81.027
+  Max  reward : 2.954
+  Positive steps : 54 / 300  (18.0%)
+
+ step      reward   tgt0   tgt1  det_state       
+-------------------------------------------------------
+    1      2.9217   True   True  both            
+    2      2.9538   True   True  both            
+    3      2.8133   True   True  both            
+    4      2.6497   True   True  both            
+    5      2.5024   True   True  both            
+    6      2.3680   True   True  both            
+    7      2.2399   True   True  both            
+    8      2.1077   True   True  both            
+    9      1.9597   True   True  both            
+   10      1.8278   True   True  both            
+   11      1.6983   True   True  both            
+   12      1.7233   True   True  both            
+   13      1.4808   True   True  both            
+   14      1.3734   True   True  both            
+   15      1.2705   True   True  both            
+   16      1.1738   True   True  both            
+   17    -43.9110  False   True  tgt1 only       
+   18      1.1486   True   True  both            
+   19      0.0302   True   True  both            
+   20    -35.0405  False   True  tgt1 only       
+   21      0.0893   True   True  both            
+   22      0.9602   True   True  both            
+   23     -0.0344   True   True  both            
+   24     -0.1421   True   True  both            
+   25      0.9388   True   True  both            
+   26     -0.0672   True   True  both            
+   27     -0.1753   True   True  both            
+   28      0.9077   True   True  both            
+   29     -0.0850   True   True  both            
+   30      0.9339   True   True  both            
+   31     -0.0626   True   True  both            
+   32      0.9526   True   True  both            
+   33     -0.0507   True   True  both            
+   34     -0.1554   True   True  both            
+   35      0.9295   True   True  both            
+   36     -0.0680   True   True  both            
+   37      0.9500   True   True  both            
+   38     -0.0584   True   True  both            
+   39      0.9588   True   True  both            
+   40     -0.0499   True   True  both            
+   41      0.9679   True   True  both            
+   42     -0.0236   True   True  both            
+   43      1.0053   True   True  both            
+   44      0.0191   True   True  both            
+   45      1.0472   True   True  both            
+   46      0.0510   True   True  both            
+   47     -0.0361   True   True  both            
+   48      1.0595   True   True  both            
+   49      0.0645   True   True  both            
+   50      1.0880   True   True  both            
+   51      0.0984   True   True  both            
+   52      1.1275   True   True  both            
+   53      0.1414   True   True  both            
+   54      1.1557   True   True  both            
+   55      0.1561   True   True  both            
+   56      1.1764   True   True  both            
+   57    -24.8312   True  False  tgt0 only       
+   58      0.3802   True   True  both            
+   59      1.2131   True   True  both            
+   60      0.1991   True   True  both            
+   61      1.2054   True   True  both            
+   62    -24.7948   True  False  tgt0 only       
+   63      0.3919   True   True  both            
+   64      1.2530   True   True  both            
+   65    -24.7813   True  False  tgt0 only       
+   66      0.4014   True   True  both            
+   67      1.2452   True   True  both            
+   68    -24.8101   True  False  tgt0 only       
+   69      0.3502   True   True  both            
+   70    -24.9147   True  False  tgt0 only       
+   71      0.2515   True   True  both            
+   72      1.0905   True   True  both            
+   73    -24.9485   True  False  tgt0 only       
+   74      0.1536   True   True  both            
+   75      1.0667   True   True  both            
+   76    -60.0088  False  False  none            
+   77    -34.9145  False   True  tgt1 only       
+   78    -34.0180  False   True  tgt1 only       
+   79    -60.1560  False  False  none            
+   80    -35.2106  False   True  tgt1 only       
+   81    -34.4654  False   True  tgt1 only       
+   82    -60.7646  False  False  none            
+   83    -36.0032  False   True  tgt1 only       
+   84    -35.4594  False   True  tgt1 only       
+   85    -62.0018  False  False  none            
+   86    -37.4956  False   True  tgt1 only       
+   87    -37.2134  False   True  tgt1 only       
+   88    -64.0565  False  False  none            
+   89    -39.8417  False   True  tgt1 only       
+   90    -39.8921  False   True  tgt1 only       
+   91    -67.0823  False  False  none            
+   92    -43.1977  False   True  tgt1 only       
+   93    -43.5599  False   True  tgt1 only       
+   94    -71.0964  False  False  none            
+   95    -47.6155  False   True  tgt1 only       
+   96    -48.4445  False   True  tgt1 only       
+   97    -76.4743  False  False  none            
+   98    -78.5487  False  False  none            
+   99    -55.8214  False   True  tgt1 only       
+  100    -80.9844  False  False  none            
+  101    -80.9286  False  False  none            
+  102    -80.9211  False  False  none            
+  103    -80.9317  False  False  none            
+  104    -55.8377  False   True  tgt1 only       
+  105    -54.8347  False   True  tgt1 only       
+  106    -80.9807  False  False  none            
+  107    -80.9672  False  False  none            
+  108    -80.9675  False  False  none            
+  109    -80.9888  False  False  none            
+  110    -81.0267  False  False  none            
+  111    -61.0875  False  False  none            
+  112    -61.1785  False  False  none            
+  113    -35.8495  False   True  tgt1 only       
+  114    -34.8525  False   True  tgt1 only       
+  115    -61.0376  False  False  none            
+  116    -60.9899  False  False  none            
+  117    -60.9931  False  False  none            
+  118    -61.0081  False  False  none            
+  119    -61.0480  False  False  none            
+  120    -61.1137  False  False  none            
+  121    -61.2012  False  False  none            
+  122    -35.8671  False   True  tgt1 only       
+  123    -34.9003  False   True  tgt1 only       
+  124    -60.0916  False  False  none            
+  125    -60.0479  False  False  none            
+  126    -60.0792  False  False  none            
+  127    -60.1155  False  False  none            
+  128    -60.1889  False  False  none            
+  129    -61.3088  False  False  none            
+  130    -62.4762  False  False  none            
+  131    -62.7066  False  False  none            
+  132    -63.9794  False  False  none            
+  133    -64.2476  False  False  none            
+  134    -64.5666  False  False  none            
+  135    -64.9313  False  False  none            
+  136    -66.3673  False  False  none            
+  137    -66.8254  False  False  none            
+  138    -67.3279  False  False  none            
+  139    -67.8822  False  False  none            
+  140    -68.5218  False  False  none            
+  141    -69.2377  False  False  none            
+  142    -70.0292  False  False  none            
+  143    -70.8896  False  False  none            
+  144    -72.8292  False  False  none            
+  145    -73.8594  False  False  none            
+  146    -74.9796  False  False  none            
+  147    -75.8229  False  False  none            
+  148    -75.8444  False  False  none            
+  149    -75.8644  False  False  none            
+  150    -75.8906  False  False  none            
+  151    -75.9072  False  False  none            
+  152    -75.9345  False  False  none            
+  153    -75.9223  False  False  none            
+  154    -75.7250  False  False  none            
+  155    -75.5983  False  False  none            
+  156    -75.4731  False  False  none            
+  157    -75.3483  False  False  none            
+  158    -75.2299  False  False  none            
+  159    -75.1256  False  False  none            
+  160    -40.0126  False   True  tgt1 only       
+  161    -38.9682  False   True  tgt1 only       
+  162    -40.9677  False   True  tgt1 only       
+  163    -41.9554  False   True  tgt1 only       
+  164    -41.9302  False   True  tgt1 only       
+  165    -41.9129  False   True  tgt1 only       
+  166    -41.8891  False   True  tgt1 only       
+  167    -41.8630  False   True  tgt1 only       
+  168    -41.8394  False   True  tgt1 only       
+  169    -41.8117  False   True  tgt1 only       
+  170    -41.7928  False   True  tgt1 only       
+  171    -41.7720  False   True  tgt1 only       
+  172    -41.7534  False   True  tgt1 only       
+  173    -41.7380  False   True  tgt1 only       
+  174    -41.7255  False   True  tgt1 only       
+  175    -41.7091  False   True  tgt1 only       
+  176    -41.6946  False   True  tgt1 only       
+  177    -41.6776  False   True  tgt1 only       
+  178    -41.6590  False   True  tgt1 only       
+  179    -41.6459  False   True  tgt1 only       
+  180    -41.6213  False   True  tgt1 only       
+  181    -41.6056  False   True  tgt1 only       
+  182    -40.5784  False   True  tgt1 only       
+  183    -40.5620  False   True  tgt1 only       
+  184    -40.5511  False   True  tgt1 only       
+  185    -41.5311  False   True  tgt1 only       
+  186    -41.5150  False   True  tgt1 only       
+  187    -41.4959  False   True  tgt1 only       
+  188    -40.4747  False   True  tgt1 only       
+  189    -40.4509  False   True  tgt1 only       
+  190    -40.4417  False   True  tgt1 only       
+  191    -40.4234  False   True  tgt1 only       
+  192    -40.4041  False   True  tgt1 only       
+  193    -40.3882  False   True  tgt1 only       
+  194    -40.3638  False   True  tgt1 only       
+  195    -40.3407  False   True  tgt1 only       
+  196    -40.3286  False   True  tgt1 only       
+  197    -40.3211  False   True  tgt1 only       
+  198    -40.3365  False   True  tgt1 only       
+  199    -40.3149  False   True  tgt1 only       
+  200    -40.3131  False   True  tgt1 only       
+  201    -40.3088  False   True  tgt1 only       
+  202    -40.3061  False   True  tgt1 only       
+  203    -40.3130  False   True  tgt1 only       
+  204    -40.3158  False   True  tgt1 only       
+  205    -40.3186  False   True  tgt1 only       
+  206    -40.3276  False   True  tgt1 only       
+  207    -40.3420  False   True  tgt1 only       
+  208    -40.3600  False   True  tgt1 only       
+  209    -40.3801  False   True  tgt1 only       
+  210    -40.4035  False   True  tgt1 only       
+  211    -40.4287  False   True  tgt1 only       
+  212    -40.4456  False   True  tgt1 only       
+  213    -40.4572  False   True  tgt1 only       
+  214    -40.4637  False   True  tgt1 only       
+  215    -40.4700  False   True  tgt1 only       
+  216    -40.4706  False   True  tgt1 only       
+  217    -40.4667  False   True  tgt1 only       
+  218    -40.4630  False   True  tgt1 only       
+  219    -40.4515  False   True  tgt1 only       
+  220    -40.4318  False   True  tgt1 only       
+  221    -40.4219  False   True  tgt1 only       
+  222    -40.4109  False   True  tgt1 only       
+  223    -40.4064  False   True  tgt1 only       
+  224    -40.3972  False   True  tgt1 only       
+  225    -40.3985  False   True  tgt1 only       
+  226    -40.3989  False   True  tgt1 only       
+  227    -40.3937  False   True  tgt1 only       
+  228    -40.3937  False   True  tgt1 only       
+  229    -40.3975  False   True  tgt1 only       
+  230    -40.3978  False   True  tgt1 only       
+  231    -41.4282  False   True  tgt1 only       
+  232    -41.4778  False   True  tgt1 only       
+  233    -41.4801  False   True  tgt1 only       
+  234    -41.4830  False   True  tgt1 only       
+  235    -41.4850  False   True  tgt1 only       
+  236    -41.4843  False   True  tgt1 only       
+  237    -41.4850  False   True  tgt1 only       
+  238    -41.4926  False   True  tgt1 only       
+  239    -41.5015  False   True  tgt1 only       
+  240    -41.5040  False   True  tgt1 only       
+  241    -41.5084  False   True  tgt1 only       
+  242    -41.5107  False   True  tgt1 only       
+  243    -41.5215  False   True  tgt1 only       
+  244    -41.5332  False   True  tgt1 only       
+  245    -41.5524  False   True  tgt1 only       
+  246    -41.5766  False   True  tgt1 only       
+  247    -41.6027  False   True  tgt1 only       
+  248    -41.6265  False   True  tgt1 only       
+  249    -41.6529  False   True  tgt1 only       
+  250    -41.6981  False   True  tgt1 only       
+  251    -41.7171  False   True  tgt1 only       
+  252    -43.1681  False   True  tgt1 only       
+  253    -67.0681  False  False  none            
+  254    -67.0727  False  False  none            
+  255    -67.0881  False  False  none            
+  256    -68.1902  False  False  none            
+  257    -68.2378  False  False  none            
+  258    -68.3066  False  False  none            
+  259    -68.4033  False  False  none            
+  260    -68.5281  False  False  none            
+  261    -68.6813  False  False  none            
+  262    -68.8707  False  False  none            
+  263    -69.1026  False  False  none            
+  264    -69.3767  False  False  none            
+  265    -69.7017  False  False  none            
+  266    -70.0800  False  False  none            
+  267    -70.5173  False  False  none            
+  268    -71.0148  False  False  none            
+  269    -71.5752  False  False  none            
+  270    -72.2068  False  False  none            
+  271    -72.9102  False  False  none            
+  272    -73.6899  False  False  none            
+  273    -74.5513  False  False  none            
+  274    -75.4985  False  False  none            
+  275    -76.5348  False  False  none            
+  276    -77.6607  False  False  none            
+  277    -78.1362  False  False  none            
+  278    -78.1353  False  False  none            
+  279    -78.1359  False  False  none            
+  280    -78.1361  False  False  none            
+  281    -78.1364  False  False  none            
+  282    -78.1367  False  False  none            
+  283    -78.1378  False  False  none            
+  284    -78.1347  False  False  none            
+  285    -78.1337  False  False  none            
+  286    -78.1344  False  False  none            
+  287    -78.1370  False  False  none            
+  288    -78.1337  False  False  none            
+  289    -78.1322  False  False  none            
+  290    -78.1330  False  False  none            
+  291    -78.1311  False  False  none            
+  292    -78.1328  False  False  none            
+  293    -78.1324  False  False  none            
+  294    -78.1337  False  False  none            
+  295    -78.1302  False  False  none            
+  296    -78.1297  False  False  none            
+  297    -78.1301  False  False  none            
+  298    -78.1316  False  False  none            
+  299    -78.1305  False  False  none            
+  300    -78.1275  False  False  none            
+
+======================================================================

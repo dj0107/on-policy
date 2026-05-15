@@ -13,7 +13,7 @@ set EXP_NAME=nalpari_v1
 set NUM_AGENTS=5
 set KMP_DUPLICATE_LIB_OK=TRUE
 set PYTHONPATH=%cd%
-set NUM_ENV_STEPS=2000000
+set NUM_ENV_STEPS=6000000
 set N_ROLLOUT=4
 set N_SEEDS=3
 set N_EPISODES=3
@@ -116,12 +116,12 @@ if exist "%TRAIN_DONE%" (
 )
 
 echo [1/4] Resuming training from checkpoint...
-set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 300 --use_eval %STABLE_OPTS% --resume_from %CHECKPOINT_DIR%"
+set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 150 --use_eval %STABLE_OPTS% --resume_from %CHECKPOINT_DIR%"
 goto :do_training
 
 :fresh_training
 echo [1/4] Starting fresh training... (this may take hours)
-set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 300 --use_eval %STABLE_OPTS%"
+set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 150 --use_eval %STABLE_OPTS%"
 goto :do_training
 
 :do_training

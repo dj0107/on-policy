@@ -300,7 +300,7 @@ def _draw_snapshots(fig, log, env_meta, n_snaps=5):
             spine.set_edgecolor('#888')
 
 
-def plot_episode(npz_path, out_path, title=None):
+def plot_episode(npz_path, out_path, title=None, t_max=None):
     d = np.load(npz_path, allow_pickle=True)
     env_meta = {
         'map_min': float(d['map_min']),
@@ -312,19 +312,20 @@ def plot_episode(npz_path, out_path, title=None):
         'dt': float(d['dt']),
         'max_steps': int(d['max_steps']),
     }
+    sl = slice(0, t_max + 1) if t_max is not None else slice(None)
     log = {
-        'uav_pos': d['uav_pos'],
-        'target_pos': d['target_pos'],
-        'target_pos_est': d['target_pos_est'],
-        'energy_per_uav': d['energy_per_uav'],
-        'energy_total': d['energy_total'],
-        'F_kt': d['F_kt'],
-        'alpha': d['alpha'],
-        'p_ut': d['p_ut'],
-        'W_kt': d['W_kt'],
-        'eps_kt': d['eps_kt'],
-        'team_reward': d['team_reward'],
-        'collisions': d['collisions'],
+        'uav_pos': d['uav_pos'][sl],
+        'target_pos': d['target_pos'][sl],
+        'target_pos_est': d['target_pos_est'][sl],
+        'energy_per_uav': d['energy_per_uav'][sl],
+        'energy_total': d['energy_total'][sl],
+        'F_kt': d['F_kt'][sl],
+        'alpha': d['alpha'][sl],
+        'p_ut': d['p_ut'][sl],
+        'W_kt': d['W_kt'][sl],
+        'eps_kt': d['eps_kt'][sl],
+        'team_reward': d['team_reward'][sl],
+        'collisions': d['collisions'][sl],
     }
     method = str(d['method'])
     seed = int(d['seed'])
@@ -342,10 +343,11 @@ def plot_episode(npz_path, out_path, title=None):
     ax_map.set_title('Top-down trajectory  (UAVs · targets · risk zones · BS)',
                      fontsize=10.5, fontweight='semibold')
 
+    t_shown = t_max if t_max is not None else env_meta['max_steps']
     title_str = title or (f"Episode visualization · method={method} · seed={seed}    "
                           f"|    U={env_meta['num_uavs']}, K={env_meta['num_targets']}, "
                           f"map=[{env_meta['map_min']:.0f}, {env_meta['map_max']:.0f}] m, "
-                          f"δ={env_meta['dt']}s, T={env_meta['max_steps']}")
+                          f"δ={env_meta['dt']}s, T={t_shown}")
     fig.suptitle(title_str, fontsize=11.5, fontweight='bold', y=0.99)
 
     ax_e = fig.add_subplot(gs_top[0, 1])
@@ -374,9 +376,11 @@ def main():
     parser.add_argument('--episode_npz', type=str, required=True)
     parser.add_argument('--out_path', type=str, required=True)
     parser.add_argument('--title', type=str, default=None)
+    parser.add_argument('--t_max', type=int, default=None,
+                        help='Truncate episode to first t_max steps')
     args = parser.parse_args()
     os.makedirs(os.path.dirname(args.out_path) or '.', exist_ok=True)
-    plot_episode(args.episode_npz, args.out_path, title=args.title)
+    plot_episode(args.episode_npz, args.out_path, title=args.title, t_max=args.t_max)
 
 
 if __name__ == '__main__':

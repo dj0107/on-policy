@@ -157,19 +157,19 @@ class UAVTrackingEnv(gym.Env):
         self.num_uavs = num_uavs
         self.num_targets = num_targets
         self.dt = dt
-        self.max_steps = 300
+        self.max_steps = 150
 
         self.use_aai = use_aai
         self.aai_callback = aai_callback
         self.randomize_aai = randomize_aai
         self.log_episode = log_episode
 
-        # 위험구역
+        # 위험구역 (맵 300x300 기준 재조정)
         all_zones = [
-            np.array([200.0, 200.0], dtype=np.float32),
-            np.array([-150.0, 300.0], dtype=np.float32),
-            np.array([300.0, -250.0], dtype=np.float32),
-            np.array([-250.0, -200.0], dtype=np.float32),
+            np.array([100.0,  100.0], dtype=np.float32),
+            np.array([-80.0,  120.0], dtype=np.float32),
+            np.array([120.0,  -90.0], dtype=np.float32),
+            np.array([-100.0, -80.0], dtype=np.float32),
         ]
         self.critical_zones = all_zones[:num_critical_zones]
 
@@ -178,19 +178,16 @@ class UAVTrackingEnv(gym.Env):
         self.snr_threshold = 10 ** (self.snr_threshold_dB / 10.0)
         self.R_c_threshold = 1.218e6
         self.d_min = 5.0
-        self.map_min, self.map_max = -500.0, 500.0
+        self.map_min, self.map_max = -150.0, 150.0
 
-        # 보상 가중치 (논문 충실 — value tuning만)
-        # lam2 5→10: 트래킹 신호 약간 강화
-        # lam3 10→1: 충돌 페널티가 다른 신호를 압도하던 문제 완화
-        # 나머지는 paper 기본값
-        self.lam1 = 1.0
-        self.lam2 = 10.0
-        self.lam3 = 0.5    # 1.0→0.5: 충돌 패널티 완화 → 더 적극적 항법 허용
-        self.lam4 = 1.0
-        self.lam5 = 5.0    # 15→5: lam7 detection reward 도입으로 binary penalty 완화
-        self.lam6 = 5.0    # 2.0→5.0: 접근 보상 강화 (전 UAV 대상)
-        self.lam7 = 20.0   # 신규: 탐지 성공 시 직접 양수 보상
+        # 보상 가중치
+        self.lam1 = 2.0    # 추적 정확도 (F_kt)
+        self.lam2 = 15.0   # swarm 전체 실패 페널티
+        self.lam3 = 0.5    # 충돌/경계 페널티
+        self.lam4 = 0.0    # 통신 페널티 (삭제됨)
+        self.lam5 = 8.0    # untracked 페널티
+        self.lam6 = 8.0    # r_approach shaping
+        self.lam7 = 15.0   # r_detect 양수 보상
 
         self.sigma_w_sq = sigma_w_sq
         self.sigma_r0_sq = 10.0
@@ -243,35 +240,35 @@ class UAVTrackingEnv(gym.Env):
         self.time_slot = 0
         self.bs_pos = np.array([0.0, 0.0], dtype=np.float32)
 
-        # 1) 타겟 먼저 생성 (랜덤 위치/속도)
+        # 1) 타겟 먼저 생성 — 맵 전체 랜덤 (±150m)
         self.targets = [
             Target(i,
-                   [np.random.uniform(self.map_min*0.6, self.map_max*0.6),
-                    np.random.uniform(self.map_min*0.6, self.map_max*0.6)],
+                   [np.random.uniform(self.map_min, self.map_max),
+                    np.random.uniform(self.map_min, self.map_max)],
                    [np.random.uniform(-2, 2), np.random.uniform(-2, 2)])
             for i in range(self.num_targets)
         ]
 
-        # 2) UAV를 타겟 근처에 배치 → 초기 탐지 보장 (한 번 놓치면 EKF 복원 불가)
-        #    각 타겟에 round-robin 할당: 첫 UAV는 바로 위 (0.01m 오프셋, angle singularity 회피)
-        #    나머지는 반경 8m 원형 분포 (d_min=5m 보다 큼)
+        # 2) UAV를 타겟 근처 센싱 가능 범위(10~80m) 내 랜덤 배치
+        #    수평 80m + 고도 15m → 3D ~81m, SNR >> threshold (탐지 보장)
         uavs_per_target = {t: [] for t in range(self.num_targets)}
         for u in range(self.num_uavs):
             uavs_per_target[u % self.num_targets].append(u)
 
         uav_positions = [None] * self.num_uavs
         for t_idx, target in enumerate(self.targets):
-            group = uavs_per_target[t_idx]
-            n_around = max(1, len(group) - 1)
-            for idx_in_group, u_idx in enumerate(group):
-                if idx_in_group == 0:
-                    offset = np.array([0.01, 0.0], dtype=np.float32)
-                else:
-                    angle = 2.0 * math.pi * (idx_in_group - 1) / n_around
-                    radius = 8.0
-                    offset = np.array([radius * math.cos(angle),
-                                       radius * math.sin(angle)], dtype=np.float32)
-                uav_positions[u_idx] = (target.pos + offset).astype(np.float32)
+            for u_idx in uavs_per_target[t_idx]:
+                for _ in range(30):
+                    angle = np.random.uniform(0, 2.0 * math.pi)
+                    radius = np.random.uniform(10.0, 80.0)
+                    pos = target.pos + np.array([radius * math.cos(angle),
+                                                 radius * math.sin(angle)], dtype=np.float32)
+                    pos = np.clip(pos, self.map_min, self.map_max)
+                    if all(uav_positions[j] is None or
+                           np.linalg.norm(pos - uav_positions[j]) >= self.d_min
+                           for j in range(self.num_uavs)):
+                        break
+                uav_positions[u_idx] = pos
 
         self.uavs = [
             UAV(i, uav_positions[i].tolist(), altitude=15.0)
@@ -371,7 +368,7 @@ class UAVTrackingEnv(gym.Env):
                 uav.p_ut = 1.0
 
     def _get_obs(self):
-        POS_SCALE = 500.0
+        POS_SCALE = 150.0
         E_SCALE = 100000.0
         F_SCALE = 1000.0
         V_SCALE = 10.0
@@ -525,21 +522,22 @@ class UAVTrackingEnv(gym.Env):
             else:
                 uav.local_estimates[t_idx] = None
 
-        # 표준 PCRLB 재귀 (Tichavsky 1998 / Van Trees)
-        # 논문 식 (26)은 typo로 추정 — F_kt가 무한정 0에 수렴하는 문제 해결
-        # J_{k|k-1} = [F J_{k-1}⁻¹ Fᵀ + Q]⁻¹
-        # J_k       = J_{k|k-1} + Σ α HᵀR⁻¹H
+        # 표준 PCRLB 재귀 
+        # J_pred = (F · J⁻¹ · Fᵀ + Q)⁻¹
         for target in self.targets:
             try:
-                P_post_prev = np.linalg.inv(target.J_matrix)
-                P_prior = self.F_mat @ P_post_prev @ self.F_mat.T + self.Q
-                prior_J = np.linalg.inv(P_prior + np.eye(4, dtype=np.float32) * 1e-6)
-                target.J_matrix = (prior_J + target.measurement_info).astype(np.float32)
-                PCRLB = np.linalg.inv(target.J_matrix + np.eye(4, dtype=np.float32) * 1e-6)
-                target.F_kt = float(min(np.trace(self.Lambda @ PCRLB @ self.Lambda.T), 1000.0))
+                J_prev_inv = np.linalg.inv(target.J_matrix)
+                P_pred_fim = self.F_mat @ J_prev_inv @ self.F_mat.T + self.Q
+                J_pred = np.linalg.inv(P_pred_fim)
             except np.linalg.LinAlgError:
-                # 수치적으로 불안정한 경우 reset
-                target.J_matrix = np.eye(4, dtype=np.float32) * 0.1
+                J_pred = target.J_matrix  # fallback
+
+            target.J_matrix = J_pred + target.measurement_info
+
+            try:
+                PCRLB = np.linalg.inv(target.J_matrix)
+                target.F_kt = float(np.trace(self.Lambda @ PCRLB @ self.Lambda.T))
+            except np.linalg.LinAlgError:
                 target.F_kt = 1000.0
 
     def _bs_fusion(self):
