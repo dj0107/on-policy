@@ -184,8 +184,11 @@ def _draw_F_kt_timeline(ax, log, env_meta):
     F = log['F_kt']  # (T, K)
     T, K = F.shape
     ts = np.arange(T)
-    # quality = (1 - F_kt/1000) * 100  →  100%=완벽, 0%=추적 불가
-    quality = (1.0 - np.clip(F, 0.0, 1000.0) / 1000.0) * 100.0
+    # log 정규화: quality = (1 - log10(1+F_kt)/log10(1001)) * 100
+    # 선형 1000-cap 대비 중간 범위(10~100 m²)가 잘 보임
+    quality = np.maximum(0.0,
+        (1.0 - np.log10(1.0 + np.clip(F, 0.0, 1e6)) / np.log10(1001.0)) * 100.0
+    )
     tgt_colors = _make_target_colors(K)
     for k in range(K):
         ax.plot(ts, quality[:, k], color=tgt_colors[k], linewidth=1.6,

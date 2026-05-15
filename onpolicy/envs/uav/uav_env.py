@@ -151,7 +151,7 @@ class UAVTrackingEnv(gym.Env):
     def __init__(self, num_uavs=5, num_targets=2, dt=1.0,
                  use_aai=True, aai_callback=None,
                  randomize_aai=False,
-                 sigma_w_sq=0.5, log_episode=False,
+                 sigma_w_sq=0.1, log_episode=False,
                  num_critical_zones=2):
         super(UAVTrackingEnv, self).__init__()
         self.num_uavs = num_uavs
@@ -186,10 +186,11 @@ class UAVTrackingEnv(gym.Env):
         # 나머지는 paper 기본값
         self.lam1 = 1.0
         self.lam2 = 10.0
-        self.lam3 = 1.0
+        self.lam3 = 0.5    # 1.0→0.5: 충돌 패널티 완화 → 더 적극적 항법 허용
         self.lam4 = 1.0
-        self.lam5 = 15.0   # 5 → 15: 미탐지 페널티 강화
-        self.lam6 = 2.0    # 거리 기반 항법 보상 (밀도 높은 gradient 제공)
+        self.lam5 = 5.0    # 15→5: lam7 detection reward 도입으로 binary penalty 완화
+        self.lam6 = 5.0    # 2.0→5.0: 접근 보상 강화 (전 UAV 대상)
+        self.lam7 = 20.0   # 신규: 탐지 성공 시 직접 양수 보상
 
         self.sigma_w_sq = sigma_w_sq
         self.sigma_r0_sq = 10.0
@@ -231,7 +232,7 @@ class UAVTrackingEnv(gym.Env):
                            [q13, 0, q33, 0], [0, q13, 0, q33]], dtype=np.float32) * self.sigma_w_sq
         self.Q += np.eye(4) * 1e-6
         self.Q_inv = np.linalg.inv(self.Q)
-        self.Lambda = np.diag([1.0, 1.0, dt, dt]).astype(np.float32)
+        self.Lambda = np.diag([1.0, 1.0, 0.0, 0.0]).astype(np.float32)
 
     def seed(self, seed=None):
         np.random.seed(seed if seed is not None else 1)
@@ -596,6 +597,7 @@ class UAVTrackingEnv(gym.Env):
 
         r_tracking = 0.0
         r_untracked = 0.0
+        r_detect = 0.0
         for t_idx, target in enumerate(self.targets):
             prod_loss = 1
             n_detected = 0
@@ -608,6 +610,9 @@ class UAVTrackingEnv(gym.Env):
             )
             if n_detected == 0:
                 r_untracked -= self.lam5
+            else:
+                # 탐지 성공 시 직접 양수 보상 → 탐지 행동 명시적 강화
+                r_detect += self.lam7
 
         r_collision = -self.lam3 * (n_collisions + boundary_violations)
 
@@ -617,16 +622,15 @@ class UAVTrackingEnv(gym.Env):
                 if alpha == 1 and u.last_R_c < self.R_c_threshold:
                     r_comm -= self.lam4 * (self.R_c_threshold - u.last_R_c) / self.R_c_threshold
 
-        # 항법 shaping: 담당 타겟과의 거리에 비례한 dense reward
-        # 탐지 반경(~103m)의 2배인 200m 내에서 선형 증가 → 탐지 없어도 접근 gradient 제공
+        # 항법 shaping: 전 UAV가 가장 가까운 타겟 기준으로 각자 보상 받음
+        # → 할당과 무관하게 모든 UAV에 타겟 접근 gradient 제공
+        # → 타겟별 가장 가까운 UAV만 반영 → 한 타겟에 쏠림 방지
         r_approach = 0.0
-        for u_idx, uav in enumerate(self.uavs):
-            t_idx = self.assignment[u_idx]
-            target = self.targets[t_idx]
-            dist = np.linalg.norm(uav.pos - target.pos)
-            r_approach += max(0.0, 1.0 - dist / 200.0) * self.lam6
+        for t_idx, target in enumerate(self.targets):
+            min_dist = min(np.linalg.norm(uav.pos - target.pos) for uav in self.uavs)
+            r_approach += max(0.0, 1.0 - min_dist / 200.0) * self.lam6
 
-        return float(r_energy + r_tracking + r_collision + r_comm + r_untracked + r_approach)
+        return float(r_energy + r_tracking + r_collision + r_comm + r_untracked + r_detect + r_approach)
 
     def _log_step(self, team_reward, n_collisions):
         log = self._episode_log

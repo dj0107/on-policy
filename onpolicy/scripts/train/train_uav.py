@@ -113,14 +113,8 @@ def main(args):
                              job_type="training",
                              reinit=True)
         else:
-            if not run_dir.exists():
-                curr_run = 'run1'
-            else:
-                exst_run_nums = [int(str(folder.name).split('run')[1])
-                                 for folder in run_dir.iterdir()
-                                 if str(folder.name).startswith('run')]
-                curr_run = 'run1' if len(exst_run_nums) == 0 else 'run%i' % (max(exst_run_nums) + 1)
-            run_dir = run_dir / curr_run
+            # run 번호 자동 증가 제거 — archive가 버전 관리 담당
+            run_dir = run_dir / 'latest'
             if not run_dir.exists():
                 os.makedirs(str(run_dir))
 
