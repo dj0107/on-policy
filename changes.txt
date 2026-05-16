@@ -22,7 +22,7 @@ A2. UAV 초기 송신 전력
 
 A3. UAV 고도
     논문: altitude = 100.0 m
-    현재: altitude = 15.0 m
+    현재: altitude = 90.0 m
 
 A4. 에피소드 최대 스텝
     논문: max_steps = 100

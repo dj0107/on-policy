@@ -320,6 +320,13 @@ class LLMAAI:
             raise ValueError(f'unknown provider: {provider}. '
                              f'Supported: anthropic, openai, deepseek, gemini, mock')
 
+        if self._client is not None:
+            print(f'[LLMAAI] connected  provider={provider}  model={model}')
+        elif provider == 'mock':
+            print(f'[LLMAAI] mock mode  (heuristic only, no API)')
+        else:
+            print(f'[LLMAAI] WARNING: API key not set for provider={provider} — heuristic fallback')
+
         # 통계
         self.stats = {
             'n_calls': 0, 'n_cache_hits': 0, 'n_throttled': 0,
@@ -538,8 +545,8 @@ def default_callback(env):
     global _default_instance
     if _default_instance is None:
         _default_instance = LLMAAI(
-            model=os.environ.get('LLM_AAI_MODEL', 'claude-sonnet-4-6'),
-            provider=os.environ.get('LLM_AAI_PROVIDER', 'anthropic'),
+            model=os.environ.get('LLM_AAI_MODEL', 'claude-sonnet-4-6').strip(),
+            provider=os.environ.get('LLM_AAI_PROVIDER', 'anthropic').strip(),
             call_every=int(os.environ.get('LLM_AAI_CALL_EVERY', '10')),
             verbose=os.environ.get('LLM_AAI_VERBOSE', '0') == '1',
         )

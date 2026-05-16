@@ -13,7 +13,7 @@ set EXP_NAME=nalpari_v1
 set NUM_AGENTS=5
 set KMP_DUPLICATE_LIB_OK=TRUE
 set PYTHONPATH=%cd%
-set NUM_ENV_STEPS=6000000
+set NUM_ENV_STEPS=50000000
 set N_ROLLOUT=4
 set N_SEEDS=3
 set N_EPISODES=3
@@ -171,6 +171,12 @@ if not defined LLM_KEY_SET (
     echo   [SKIP] llm_aai - no LLM API key set ^(ANTHROPIC_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY^).
     goto :merge
 )
+REM --- provider 자동 감지 (우선순위: deepseek > anthropic > openai > gemini) ---
+if defined DEEPSEEK_API_KEY ( set "LLM_AAI_PROVIDER=deepseek" & set "LLM_AAI_MODEL=deepseek-chat" )
+if not defined DEEPSEEK_API_KEY if defined ANTHROPIC_API_KEY ( set "LLM_AAI_PROVIDER=anthropic" & set "LLM_AAI_MODEL=claude-sonnet-4-6" )
+if not defined DEEPSEEK_API_KEY if not defined ANTHROPIC_API_KEY if defined OPENAI_API_KEY ( set "LLM_AAI_PROVIDER=openai" & set "LLM_AAI_MODEL=gpt-4o" )
+if not defined DEEPSEEK_API_KEY if not defined ANTHROPIC_API_KEY if not defined OPENAI_API_KEY if defined GEMINI_API_KEY ( set "LLM_AAI_PROVIDER=gemini" & set "LLM_AAI_MODEL=gemini-2.0-flash" )
+echo   [LLM] provider=%LLM_AAI_PROVIDER%  model=%LLM_AAI_MODEL%
 echo   [eval] llm_aai
 python tools\evaluate_trained.py --baseline llm_aai --out_dir "%EVAL_OUT%\llm_aai" --checkpoint_dir "%CHECKPOINT_DIR%" --aai_callback tools.llm_aai:default_callback --sweep_uav %SWEEP_UAV% --sweep_target %SWEEP_TARGET% --sweep_noise %SWEEP_NOISE% --sweep_tau %SWEEP_TAU% --save_episode --episode_seeds %EPISODE_SEEDS% --n_seeds %N_SEEDS% --n_episodes %N_EPISODES%
 if errorlevel 1 ( echo [ERROR] llm_aai eval failed. & goto :error )

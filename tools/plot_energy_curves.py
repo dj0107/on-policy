@@ -96,7 +96,7 @@ def plot_sweep_comparison(sweep_dir, out_path, x_label=None, title=None):
         print(f'[skip] no data in {sweep_dir}')
         return
 
-    fig, axes = plt.subplots(1, 4, figsize=(18, 4.2))
+    fig, axes = plt.subplots(1, 5, figsize=(22, 4.2))
 
     # 패널 1: total energy
     ax = axes[0]
@@ -133,12 +133,28 @@ def plot_sweep_comparison(sweep_dir, out_path, x_label=None, title=None):
     ax.set_ylabel('Detection rate  [%]', color='#222')
     ax2.set_ylabel('Avg. collisions / episode', color='#666')
     ax.set_ylim(-5, 105)
-    ax.set_title('Tracking quality', fontweight='semibold')
+    ax.set_title('Detection rate', fontweight='semibold')
     ax2.tick_params(axis='y', colors='#666')
     ax.legend(loc='lower left', fontsize=9)
 
-    # 패널 3: tracking error (실제 ||S_est - S_true||) — F_kt가 saturation되는 한계 보완
+    # 패널 3: F_kt → tracking quality  (0%=최악, 100%=완벽)
     ax = axes[2]
+    for method, runs in data.items():
+        style = METHOD_STYLE.get(method, {'color': 'k', 'marker': 'o',
+                                          'linestyle': '-', 'label': method})
+        xs = [r['x'] for r in runs]
+        quality = [(1.0 - min(r['F_kt_mean'], 1000.0) / 1000.0) * 100.0 for r in runs]
+        ax.plot(xs, quality, color=style['color'], marker=style['marker'],
+                linestyle=style['linestyle'], label=style['label'],
+                markersize=6, linewidth=1.5)
+    ax.set_xlabel(x_label or runs[0]['x_label'])
+    ax.set_ylabel('Tracking quality  [%]')
+    ax.set_ylim(-5, 105)
+    ax.set_title('Tracking quality (F_kt)', fontweight='semibold')
+    ax.legend(loc='best', fontsize=9)
+
+    # 패널 4: tracking error (실제 ||S_est - S_true||) — F_kt가 saturation되는 한계 보완
+    ax = axes[3]
     for method, runs in data.items():
         style = METHOD_STYLE.get(method, {'color': 'k', 'marker': 'o',
                                           'linestyle': '-', 'label': method})
@@ -152,8 +168,8 @@ def plot_sweep_comparison(sweep_dir, out_path, x_label=None, title=None):
     ax.set_title('Estimation error', fontweight='semibold')
     ax.legend(loc='best', fontsize=9)
 
-    # 패널 4: per-step energy curve (한 condition, 모든 method 비교)
-    ax = axes[3]
+    # 패널 5: per-step energy curve (한 condition, 모든 method 비교)
+    ax = axes[4]
     if len(data):
         # 중간 condition을 골라 보여줌
         any_method = next(iter(data))
@@ -227,6 +243,45 @@ def plot_overview(results_dir, out_path):
     print(f'[saved] {out_path}')
 
 
+def plot_fkt_overview(results_dir, out_path):
+    """모든 sweep을 한 figure에 모아서 F_kt → tracking quality [%] 비교."""
+    n = len(SWEEP_INFO)
+    fig, axes = plt.subplots(1, n, figsize=(4.0 * n, 3.8))
+    if n == 1:
+        axes = [axes]
+
+    for ax, (sweep_name, (xlbl, ttl)) in zip(axes, SWEEP_INFO.items()):
+        sweep_dir = os.path.join(results_dir, sweep_name)
+        data = load_sweep_dir(sweep_dir)
+        if not data:
+            ax.text(0.5, 0.5, f'(no data:\n{sweep_name})',
+                    ha='center', va='center', transform=ax.transAxes,
+                    color='#999', fontsize=11)
+            ax.set_xlabel(xlbl)
+            ax.set_ylabel(r'$F_{kt}$  (lower = better)')
+            ax.set_title(ttl, fontweight='semibold')
+            continue
+        for method, runs in data.items():
+            style = METHOD_STYLE.get(method, {'color': 'k', 'marker': 'o',
+                                              'linestyle': '-', 'label': method})
+            xs = [r['x'] for r in runs]
+            ys = [r['F_kt_mean'] for r in runs]
+            ax.plot(xs, ys, color=style['color'], marker=style['marker'],
+                    linestyle=style['linestyle'], label=style['label'],
+                    markersize=6, linewidth=1.4)
+        ax.set_xlabel(xlbl)
+        ax.set_ylabel(r'$F_{kt}$  (lower = better)')
+        ax.set_title(ttl, fontweight='semibold')
+        ax.legend(loc='best', fontsize=9)
+
+    fig.suptitle(r'$F_{kt}$ across experimental conditions',
+                 fontsize=14, fontweight='bold', y=1.03)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+    print(f'[saved] {out_path}')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--results_dir', type=str, required=True)
@@ -244,6 +299,9 @@ def main():
 
     # 모두 모은 overview (energy only)
     plot_overview(args.results_dir, os.path.join(out_dir, 'energy_overview.png'))
+
+    # F_kt tracking quality overview
+    plot_fkt_overview(args.results_dir, os.path.join(out_dir, 'fkt_overview.png'))
 
 
 if __name__ == '__main__':

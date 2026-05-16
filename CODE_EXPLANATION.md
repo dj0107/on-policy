@@ -199,7 +199,7 @@ UAV 하나를 나타내는 클래스. 이동, 에너지 소모, 레이더/통신
 ### __init__ (59~90줄)
 
 ```python
-        self.H = altitude     # 고도 (15m로 고정)
+        self.H = altitude     # 고도 (90m로 고정)
         self.v_max = max_speed  # 최대 속도 (10m/s)
         self.energy = max_energy  # 현재 에너지 (초기 100,000 J)
         self.max_energy = max_energy
@@ -451,7 +451,7 @@ EKF 측정 잡음 파라미터.
 - floor 값들: 수치 안정성용 하한선
 
 ```python
-        self.uavs = [UAV(i, [0, 0], altitude=15.0) for i in range(self.num_uavs)]
+        self.uavs = [UAV(i, [0, 0], altitude=90.0) for i in range(self.num_uavs)]
         self.targets = [Target(i, [0, 0], [0, 0]) for i in range(self.num_targets)]
         self.assignment = {u: 0 for u in range(self.num_uavs)}
 ```

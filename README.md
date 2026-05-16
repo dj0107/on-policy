@@ -82,7 +82,7 @@ nalpari/
 #    - 30회 재시도로 d_min=5m 충돌 회피
 ```
 
-UAV 고도 H=15m. 탐지 가능 수평 거리 ≈ 103m이므로 80m 이내 배치 시 초기 탐지 보장.
+UAV 고도 H=90m. 탐지 가능 수평 거리 ≈ 52m이므로 50m 이내 배치 시 초기 탐지 보장 (slant ≈ 103m < 104m 임계).
 
 ### 2.3 Reward 가중치
 
@@ -205,7 +205,7 @@ target.F_kt = trace(Λ · PCRLB · Λᵀ)
 ```python
 episodes = int(num_env_steps) // episode_length // n_rollout_threads
 ```
-NUM_ENV_STEPS=6000000, ep_len=150, n_threads=4 → **10000 에피소드**.
+NUM_ENV_STEPS=50000000, ep_len=150, n_threads=4 → **83333 에피소드**.
 
 매 episode 후 모델 저장 (save_interval=1, 덮어쓰기).
 
@@ -302,7 +302,7 @@ CLI `--randomize_aai`로 분포 명시 (기본 False).
 ```bat
 set EXP_NAME=nalpari_v1
 set NUM_AGENTS=5
-set NUM_ENV_STEPS=6000000   :: 10000 에피소드
+set NUM_ENV_STEPS=50000000   :: 83333 에피소드
 set N_ROLLOUT=4
 set N_SEEDS=3
 set N_EPISODES=3
