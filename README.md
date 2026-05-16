@@ -1,6 +1,6 @@
 # 날파리 (Nalpari) — Multi-UAV Target Tracking with MAPPO + AAI
 
-논문 *KJH___multi_UAV_search_trajectory* 구현 (Dec-POMDP MTT). MAPPO 정책 + Adaptive AI(AAI) 모듈 + (선택) LLM AAI 결합 구조.
+ MAPPO 정책 + Adaptive AI(AAI) 모듈 + (선택) LLM AAI 결합 구조.
 
 ---
 
