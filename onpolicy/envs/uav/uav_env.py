@@ -593,24 +593,18 @@ class UAVTrackingEnv(gym.Env):
         total_energy = sum(u.last_e_tot for u in self.uavs)
         r_energy = -total_energy / 100.0
 
+        # assignment 기반 r_tracking: UAV u는 담당 타겟에만 책임
+        # → 모든 UAV가 같은 W_kt를 보고 pile-on하는 문제 방지
         r_tracking = 0.0
         r_untracked = 0.0
         r_detect = 0.0
-        for t_idx, target in enumerate(self.targets):
-            prod_loss = 1
-            n_detected = 0
-            for uav in self.uavs:
-                a = uav.is_detected_per_target.get(t_idx, 0)
-                prod_loss *= (1 - a)
-                n_detected += a
+        for u_idx, uav in enumerate(self.uavs):
+            t_idx = self.assignment.get(u_idx, 0)
+            target = self.targets[t_idx]
+            alpha_u = float(uav.is_detected_per_target.get(t_idx, 0))
             r_tracking -= target.W_kt * (
-                self.lam1 * (target.F_kt / 100.0) + self.lam2 * prod_loss
+                self.lam1 * (target.F_kt / 100.0) + self.lam2 * (1.0 - alpha_u)
             )
-            if n_detected == 0:
-                r_untracked -= self.lam5
-            else:
-                # 탐지 성공 시 직접 양수 보상 → 탐지 행동 명시적 강화
-                r_detect += self.lam7
 
         r_collision = -self.lam3 * (n_collisions + boundary_violations)
 

@@ -78,7 +78,8 @@
 
   ## 보상 항목 (현재 기준, per step)
     r_energy    = -total_step_energy / 100
-    r_tracking  = -W_kt * (lam1 * F_kt/100 + lam2 * prod_loss)  [per target]
+    r_tracking  = sum_u[ -W_kt[assign(u)] * (lam1 * F_kt[assign(u)]/100 + lam2 * (1-alpha_u)) ]
+                  (UAV별 담당 타겟 기준 — pile-on 방지)
     r_collision = -lam3 * (충돌 수 + 경계 위반)
     r_comm      = -lam4 * (1 - R_c/R_c_threshold)               (통신 불량 시, lam4=0)
 
