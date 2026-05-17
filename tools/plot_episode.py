@@ -10,7 +10,7 @@ plot_episode.py
    1. Top-down trajectory map  (UAV / target / risk zone / BS, 시간에 따라 fade)
    2. Energy timeline (per-UAV stack + total)
    3. Tracking accuracy F_kt timeline (per target)
-   4. AAI parameter timeline (W_kt, p_ut, eps_kt) + detection α heatmap
+   4. Detection α heatmap (per UAV × target)
    5. UAV-target distance & assignment bar
    6. Snapshot frames (at t=0, 25, 50, 75, 99)
 
@@ -201,35 +201,11 @@ def _draw_F_kt_timeline(ax, log, env_meta):
     ax.legend(loc='lower right', fontsize=9)
 
 
-def _draw_aai_panel(ax_W, ax_p, ax_alpha, log, env_meta):
-    """AAI 출력 (W_kt, p_ut) + detection heatmap"""
-    W = log['W_kt']     # (T, K)
-    P = log['p_ut']     # (T, U)
+def _draw_detection_heatmap(ax_alpha, log, env_meta):
+    """Detection α heatmap: 각 UAV가 각 타겟을 탐지한 시계열."""
     A = log['alpha']    # (T, U, K)
     T, U, K = A.shape
-    ts = np.arange(T)
 
-    tgt_colors = _make_target_colors(K)
-    for k in range(K):
-        ax_W.plot(ts, W[:, k], color=tgt_colors[k], linewidth=1.5,
-                  label=f'Target {k}')
-    ax_W.set_xlabel('Time step')
-    ax_W.set_ylabel(r'$W_{k,t}$  (priority)')
-    ax_W.set_title('AAI: target priority', fontweight='semibold')
-    ax_W.legend(loc='best', fontsize=8)
-    ax_W.grid(True, alpha=0.25, linestyle='--')
-
-    uav_colors = _make_uav_colors(U)
-    for u in range(U):
-        ax_p.plot(ts, P[:, u], color=uav_colors[u], linewidth=1.4,
-                  alpha=0.85, label=f'UAV {u}')
-    ax_p.set_xlabel('Time step')
-    ax_p.set_ylabel(r'$p_{u,t}$  [W]')
-    ax_p.set_title('AAI: TX power per UAV', fontweight='semibold')
-    ax_p.legend(loc='best', fontsize=8, ncol=2)
-    ax_p.grid(True, alpha=0.25, linestyle='--')
-
-    # 탐지 heatmap: 각 UAV가 각 타겟을 탐지한 시계열 (U*K rows × T cols)
     heat = A.transpose(1, 2, 0).reshape(U * K, T)  # (U*K, T)
     ax_alpha.imshow(heat, aspect='auto', cmap='Greens',
                     interpolation='nearest', vmin=0, vmax=1)
@@ -331,12 +307,12 @@ def plot_episode(npz_path, out_path, title=None, t_max=None):
     seed = int(d['seed'])
 
     # 메인 figure
-    fig = plt.figure(figsize=(15.5, 10.5))
-    # 상단: 큰 trajectory map (왼쪽 절반) + 우측 상단 panel 4개
-    gs_top = fig.add_gridspec(nrows=2, ncols=4, top=0.95, bottom=0.27,
+    fig = plt.figure(figsize=(13.0, 10.5))
+    # 상단: 큰 trajectory map (왼쪽) + 에너지/F_kt (가운데) + 탐지 heatmap (오른쪽)
+    gs_top = fig.add_gridspec(nrows=2, ncols=3, top=0.95, bottom=0.27,
                               left=0.05, right=0.97,
                               hspace=0.42, wspace=0.32,
-                              width_ratios=[1.4, 1, 1, 1])
+                              width_ratios=[1.4, 1, 1])
 
     ax_map = fig.add_subplot(gs_top[:, 0])
     _draw_map_layout(ax_map, log, env_meta)
@@ -355,10 +331,8 @@ def plot_episode(npz_path, out_path, title=None, t_max=None):
     ax_F = fig.add_subplot(gs_top[1, 1])
     _draw_F_kt_timeline(ax_F, log, env_meta)
 
-    ax_W = fig.add_subplot(gs_top[0, 2])
-    ax_p = fig.add_subplot(gs_top[1, 2])
-    ax_alpha = fig.add_subplot(gs_top[:, 3])
-    _draw_aai_panel(ax_W, ax_p, ax_alpha, log, env_meta)
+    ax_alpha = fig.add_subplot(gs_top[:, 2])
+    _draw_detection_heatmap(ax_alpha, log, env_meta)
 
     # 하단: snapshot row
     _draw_snapshots(fig, log, env_meta, n_snaps=5)

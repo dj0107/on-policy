@@ -70,21 +70,17 @@
   ──────────┼─────────────┼───────────┼───────────┼──────────────
   lam1      │  1.0        │  1.0      │  1.0      │  2.0
   lam2      │  10.0       │  10.0     │  10.0     │  15.0
-  lam3      │  1.0        │  1.0      │  0.5      │  2.0
+  lam3      │  1.0        │  1.0      │  0.5      │  1.0
   lam4      │  1.0        │  1.0      │  1.0      │  0.0   ← 통신 페널티 삭제
-  lam5      │  15.0       │  15.0     │  5.0      │  8.0
-  lam6      │  2.0        │  2.0      │  5.0      │  8.0
-  lam7      │  (없음)     │  (없음)   │  20.0     │  15.0
+  lam5      │  15.0       │  15.0     │  5.0      │  0.0   ← r_untracked 제거
+  lam6      │  2.0        │  2.0      │  5.0      │  0.0   ← r_approach 제거
+  lam7      │  (없음)     │  (없음)   │  20.0     │  0.0   ← r_detect 제거
 
   ## 보상 항목 (현재 기준, per step)
     r_energy    = -total_step_energy / 100
     r_tracking  = -W_kt * (lam1 * F_kt/100 + lam2 * prod_loss)  [per target]
-    r_untracked = -lam5  (타겟 미탐지 시)
-    r_detect    = +lam7  (타겟 탐지 시)                          [신규]
     r_collision = -lam3 * (충돌 수 + 경계 위반)
-    r_comm      = -lam4 * (1 - R_c/R_c_threshold)               (통신 불량 시)
-    r_approach  = sum_target[ max(0, 1 - min_dist/200) * lam6 ]
-                  (전 UAV 중 각 타겟에 가장 가까운 UAV 기준)     [할당 무관으로 변경]
+    r_comm      = -lam4 * (1 - R_c/R_c_threshold)               (통신 불량 시, lam4=0)
 
 --------------------------------------------------------------------------------
 [3] MAPPO 학습 하이퍼파라미터

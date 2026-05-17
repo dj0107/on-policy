@@ -183,11 +183,11 @@ class UAVTrackingEnv(gym.Env):
         # 보상 가중치
         self.lam1 = 2.0    # 추적 정확도 (F_kt)
         self.lam2 = 15.0   # swarm 전체 실패 페널티
-        self.lam3 = 2.0    # 충돌/경계 페널티
+        self.lam3 = 1.0    # 충돌/경계 페널티
         self.lam4 = 0.0    # 통신 페널티 (삭제됨)
-        self.lam5 = 8.0    # untracked 페널티
-        self.lam6 = 8.0    # r_approach shaping
-        self.lam7 = 15.0   # r_detect 양수 보상
+        self.lam5 = 0.0    # untracked 페널티 (제거)
+        self.lam6 = 0.0    # r_approach shaping (제거)
+        self.lam7 = 0.0    # r_detect 양수 보상 (제거)
 
         self.sigma_w_sq = sigma_w_sq
         self.sigma_r0_sq = 10.0
