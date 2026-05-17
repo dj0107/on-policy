@@ -346,14 +346,17 @@ class UAVTrackingEnv(gym.Env):
             target.d_Z_kt = min(np.linalg.norm(est_pos - cz) for cz in self.critical_zones)
         for target in self.targets:
             if target.d_Z_kt < 100.0:
-                target.W_kt = 3.0
+                w_base = 1.5
                 target.epsilon_kt = 2.0
             elif target.d_Z_kt < 200.0:
-                target.W_kt = 2.0
+                w_base = 1.0
                 target.epsilon_kt = 5.0
             else:
-                target.W_kt = 1.0
+                w_base = 0.5
                 target.epsilon_kt = 5.0
+            # 추적 품질 urgency: F_kt 상승 시 W_kt 자동 증가 → pile-on 방지
+            w_track = 1.5 * min(1.0, target.F_kt / 500.0)
+            target.W_kt = w_base + w_track
         self._build_assignment()
         # p_ut: 1W 기준으로 비례 축소 (이전 10/15/25 → 0.5/1.0/2.0)
         for u_idx, uav in enumerate(self.uavs):
@@ -593,18 +596,20 @@ class UAVTrackingEnv(gym.Env):
         total_energy = sum(u.last_e_tot for u in self.uavs)
         r_energy = -total_energy / 100.0
 
-        # assignment 기반 r_tracking: UAV u는 담당 타겟에만 책임
-        # → 모든 UAV가 같은 W_kt를 보고 pile-on하는 문제 방지
         r_tracking = 0.0
         r_untracked = 0.0
-        r_detect = 0.0
-        for u_idx, uav in enumerate(self.uavs):
-            t_idx = self.assignment.get(u_idx, 0)
-            target = self.targets[t_idx]
-            alpha_u = float(uav.is_detected_per_target.get(t_idx, 0))
+        for t_idx, target in enumerate(self.targets):
+            prod_loss = 1
+            n_detected = 0
+            for uav in self.uavs:
+                a = uav.is_detected_per_target.get(t_idx, 0)
+                prod_loss *= (1 - a)
+                n_detected += a
             r_tracking -= target.W_kt * (
-                self.lam1 * (target.F_kt / 100.0) + self.lam2 * (1.0 - alpha_u)
+                self.lam1 * (target.F_kt / 100.0) + self.lam2 * prod_loss
             )
+            if n_detected == 0:
+                r_untracked -= self.lam5
 
         r_collision = -self.lam3 * (n_collisions + boundary_violations)
 
@@ -622,7 +627,7 @@ class UAVTrackingEnv(gym.Env):
             min_dist = min(np.linalg.norm(uav.pos - target.pos) for uav in self.uavs)
             r_approach += max(0.0, 1.0 - min_dist / 200.0) * self.lam6
 
-        return float(r_energy + r_tracking + r_collision + r_comm + r_untracked + r_detect + r_approach)
+        return float(r_energy + r_tracking + r_collision + r_comm + r_untracked + r_approach)
 
     def _log_step(self, team_reward, n_collisions):
         log = self._episode_log

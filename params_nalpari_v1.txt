@@ -78,10 +78,16 @@
 
   ## 보상 항목 (현재 기준, per step)
     r_energy    = -total_step_energy / 100
-    r_tracking  = sum_u[ -W_kt[assign(u)] * (lam1 * F_kt[assign(u)]/100 + lam2 * (1-alpha_u)) ]
-                  (UAV별 담당 타겟 기준 — pile-on 방지)
+    r_tracking  = sum_k[ -W_kt[k] * (lam1 * F_kt[k]/100 + lam2 * prod_loss[k]) ]
+                  prod_loss[k] = ∏_u(1 - alpha_uk)  (어느 UAV든 탐지 시 0)
     r_collision = -lam3 * (충돌 수 + 경계 위반)
     r_comm      = -lam4 * (1 - R_c/R_c_threshold)               (통신 불량 시, lam4=0)
+
+  ## AAI 휴리스틱 W_kt (adaptive, pile-on 방지용)
+    W_kt[k] = w_base[k] + w_track[k]
+      w_base[k] = 1.5 (d_Z<100m) | 1.0 (d_Z<200m) | 0.5 (else)  ← critical zone 근접도
+      w_track[k] = 1.5 × min(1, F_kt[k]/500)                      ← 추적 품질 urgency
+    범위: [0.5, 3.0] — F_kt[k] ≥ 333일 때 w_track ≥ 1.0 → 원거리 타겟 역전 가능
 
 --------------------------------------------------------------------------------
 [3] MAPPO 학습 하이퍼파라미터
