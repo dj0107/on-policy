@@ -358,15 +358,14 @@ class UAVTrackingEnv(gym.Env):
             w_track = 1.5 * min(1.0, target.F_kt / 500.0)
             target.W_kt = w_base + w_track
         self._build_assignment()
-        # p_ut: 1W 기준으로 비례 축소 (이전 10/15/25 → 0.5/1.0/2.0)
+        # p_ut: H=90m에서 slant_min=90m, p_ut=0.5W → SNR=90<100 → 탐지 불가
+        # 근거리도 1W 유지, 200m 초과 시만 2W로 부스트
         for u_idx, uav in enumerate(self.uavs):
             target = self.targets[self.assignment[u_idx]]
             est_pos = target.S_global[:2]
             dist = np.linalg.norm(uav.pos - est_pos)
             if dist > 200.0:
                 uav.p_ut = 2.0
-            elif dist < 50.0:
-                uav.p_ut = 0.5
             else:
                 uav.p_ut = 1.0
 

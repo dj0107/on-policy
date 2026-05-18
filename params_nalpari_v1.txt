@@ -25,7 +25,8 @@
   max_energy          = 100,000  [J]
   altitude (H)        = 90.0  [m]
   tau_s_ratio         = 0.5   (센싱:통신 시간 비율 = 0.5:0.5)
-  p_ut (초기값)       = 1.0   [W]  (AAI가 스텝마다 재설정)
+  p_ut (초기값)       = 1.0   [W]  (AAI: dist≤200m→1W, dist>200m→2W)
+                                   ※ 구버전 근거리 0.5W 제거 — H=90m에서 slant≥90m, SNR=90<100 탐지불가
 
 ## 레이더 센싱 모델
   f_c                 = 2.4e9  [Hz]
