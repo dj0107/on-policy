@@ -10,7 +10,7 @@ plot_episode.py
    1. Top-down trajectory map  (UAV / target / risk zone / BS, 시간에 따라 fade)
    2. Energy timeline (per-UAV stack + total)
    3. Tracking accuracy F_kt timeline (per target)
-   4. AAI parameter timeline (W_kt, p_ut, eps_kt) + detection α heatmap
+   4. Detection α heatmap (per UAV × target)
    5. UAV-target distance & assignment bar
    6. Snapshot frames (at t=0, 25, 50, 75, 99)
 
@@ -137,7 +137,7 @@ def _draw_map_layout(ax, log, env_meta, time_range=None):
                                 fill=False, edgecolor='#444',
                                 linewidth=1.2, linestyle='-', zorder=1))
 
-    # 범례 (외부)
+    # 범례 — axes 바로 위(외부)에 가로 배치
     handles = [
         Line2D([0], [0], marker='^', color='w', markerfacecolor='#1f5fa8',
                markersize=10, label='UAV (final)'),
@@ -150,8 +150,11 @@ def _draw_map_layout(ax, log, env_meta, time_range=None):
                markersize=9, label='Base station'),
         mpatches.Patch(color=RISK_COLOR, alpha=0.45, label='Risk zone'),
     ]
-    ax.legend(handles=handles, loc='upper right', fontsize=8.5,
-              framealpha=0.92, ncol=1)
+    # 범례를 axes 외부 하단(x축 아래)에 배치 — 타이틀과 겹침 방지
+    ax.legend(handles=handles,
+              bbox_to_anchor=(0.0, -0.12, 1.0, 0.08),
+              loc='upper left', mode='expand',
+              ncol=3, fontsize=7.5, framealpha=0.92, borderaxespad=0)
 
 
 def _draw_energy_timeline(ax, log):
@@ -177,50 +180,32 @@ def _draw_energy_timeline(ax, log):
 
 
 def _draw_F_kt_timeline(ax, log, env_meta):
-    """Tracking 정확도 (F_kt) 시계열."""
+    """Tracking quality (F_kt → 높을수록 좋은 quality score로 변환)."""
     F = log['F_kt']  # (T, K)
     T, K = F.shape
     ts = np.arange(T)
+    # log 정규화: quality = (1 - log10(1+F_kt)/log10(1001)) * 100
+    # 선형 1000-cap 대비 중간 범위(10~100 m²)가 잘 보임
+    quality = np.maximum(0.0,
+        (1.0 - np.log10(1.0 + np.clip(F, 0.0, 1e6)) / np.log10(1001.0)) * 100.0
+    )
     tgt_colors = _make_target_colors(K)
     for k in range(K):
-        ax.plot(ts, F[:, k], color=tgt_colors[k], linewidth=1.6,
+        ax.plot(ts, quality[:, k], color=tgt_colors[k], linewidth=1.6,
                 label=f'Target {k}')
     ax.set_xlabel('Time step  $t$')
-    ax.set_ylabel(r'$F_{k,t}$  (PCRLB trace)')
-    ax.set_title('Tracking accuracy', fontweight='semibold')
+    ax.set_ylabel('Tracking quality  [%]')
+    ax.set_title('Tracking quality', fontweight='semibold')
+    ax.set_ylim(0, 105)
     ax.grid(True, alpha=0.25, linestyle='--')
-    ax.legend(loc='upper right', fontsize=9)
+    ax.legend(loc='lower right', fontsize=9)
 
 
-def _draw_aai_panel(ax_W, ax_p, ax_alpha, log, env_meta):
-    """AAI 출력 (W_kt, p_ut) + detection heatmap"""
-    W = log['W_kt']     # (T, K)
-    P = log['p_ut']     # (T, U)
+def _draw_detection_heatmap(ax_alpha, log, env_meta):
+    """Detection α heatmap: 각 UAV가 각 타겟을 탐지한 시계열."""
     A = log['alpha']    # (T, U, K)
     T, U, K = A.shape
-    ts = np.arange(T)
 
-    tgt_colors = _make_target_colors(K)
-    for k in range(K):
-        ax_W.plot(ts, W[:, k], color=tgt_colors[k], linewidth=1.5,
-                  label=f'Target {k}')
-    ax_W.set_xlabel('Time step')
-    ax_W.set_ylabel(r'$W_{k,t}$  (priority)')
-    ax_W.set_title('AAI: target priority', fontweight='semibold')
-    ax_W.legend(loc='best', fontsize=8)
-    ax_W.grid(True, alpha=0.25, linestyle='--')
-
-    uav_colors = _make_uav_colors(U)
-    for u in range(U):
-        ax_p.plot(ts, P[:, u], color=uav_colors[u], linewidth=1.4,
-                  alpha=0.85, label=f'UAV {u}')
-    ax_p.set_xlabel('Time step')
-    ax_p.set_ylabel(r'$p_{u,t}$  [W]')
-    ax_p.set_title('AAI: TX power per UAV', fontweight='semibold')
-    ax_p.legend(loc='best', fontsize=8, ncol=2)
-    ax_p.grid(True, alpha=0.25, linestyle='--')
-
-    # 탐지 heatmap: 각 UAV가 각 타겟을 탐지한 시계열 (U*K rows × T cols)
     heat = A.transpose(1, 2, 0).reshape(U * K, T)  # (U*K, T)
     ax_alpha.imshow(heat, aspect='auto', cmap='Greens',
                     interpolation='nearest', vmin=0, vmax=1)
@@ -291,7 +276,7 @@ def _draw_snapshots(fig, log, env_meta, n_snaps=5):
             spine.set_edgecolor('#888')
 
 
-def plot_episode(npz_path, out_path, title=None):
+def plot_episode(npz_path, out_path, title=None, t_max=None):
     d = np.load(npz_path, allow_pickle=True)
     env_meta = {
         'map_min': float(d['map_min']),
@@ -303,40 +288,42 @@ def plot_episode(npz_path, out_path, title=None):
         'dt': float(d['dt']),
         'max_steps': int(d['max_steps']),
     }
+    sl = slice(0, t_max + 1) if t_max is not None else slice(None)
     log = {
-        'uav_pos': d['uav_pos'],
-        'target_pos': d['target_pos'],
-        'target_pos_est': d['target_pos_est'],
-        'energy_per_uav': d['energy_per_uav'],
-        'energy_total': d['energy_total'],
-        'F_kt': d['F_kt'],
-        'alpha': d['alpha'],
-        'p_ut': d['p_ut'],
-        'W_kt': d['W_kt'],
-        'eps_kt': d['eps_kt'],
-        'team_reward': d['team_reward'],
-        'collisions': d['collisions'],
+        'uav_pos': d['uav_pos'][sl],
+        'target_pos': d['target_pos'][sl],
+        'target_pos_est': d['target_pos_est'][sl],
+        'energy_per_uav': d['energy_per_uav'][sl],
+        'energy_total': d['energy_total'][sl],
+        'F_kt': d['F_kt'][sl],
+        'alpha': d['alpha'][sl],
+        'p_ut': d['p_ut'][sl],
+        'W_kt': d['W_kt'][sl],
+        'eps_kt': d['eps_kt'][sl],
+        'team_reward': d['team_reward'][sl],
+        'collisions': d['collisions'][sl],
     }
     method = str(d['method'])
     seed = int(d['seed'])
 
     # 메인 figure
-    fig = plt.figure(figsize=(15.5, 10.5))
-    # 상단: 큰 trajectory map (왼쪽 절반) + 우측 상단 panel 4개
-    gs_top = fig.add_gridspec(nrows=2, ncols=4, top=0.95, bottom=0.27,
+    fig = plt.figure(figsize=(13.0, 10.5))
+    # 상단: 큰 trajectory map (왼쪽) + 에너지/F_kt (가운데) + 탐지 heatmap (오른쪽)
+    gs_top = fig.add_gridspec(nrows=2, ncols=3, top=0.95, bottom=0.27,
                               left=0.05, right=0.97,
                               hspace=0.42, wspace=0.32,
-                              width_ratios=[1.4, 1, 1, 1])
+                              width_ratios=[1.4, 1, 1])
 
     ax_map = fig.add_subplot(gs_top[:, 0])
     _draw_map_layout(ax_map, log, env_meta)
     ax_map.set_title('Top-down trajectory  (UAVs · targets · risk zones · BS)',
                      fontsize=10.5, fontweight='semibold')
 
+    t_shown = t_max if t_max is not None else env_meta['max_steps']
     title_str = title or (f"Episode visualization · method={method} · seed={seed}    "
                           f"|    U={env_meta['num_uavs']}, K={env_meta['num_targets']}, "
                           f"map=[{env_meta['map_min']:.0f}, {env_meta['map_max']:.0f}] m, "
-                          f"δ={env_meta['dt']}s, T={env_meta['max_steps']}")
+                          f"δ={env_meta['dt']}s, T={t_shown}")
     fig.suptitle(title_str, fontsize=11.5, fontweight='bold', y=0.99)
 
     ax_e = fig.add_subplot(gs_top[0, 1])
@@ -344,10 +331,8 @@ def plot_episode(npz_path, out_path, title=None):
     ax_F = fig.add_subplot(gs_top[1, 1])
     _draw_F_kt_timeline(ax_F, log, env_meta)
 
-    ax_W = fig.add_subplot(gs_top[0, 2])
-    ax_p = fig.add_subplot(gs_top[1, 2])
-    ax_alpha = fig.add_subplot(gs_top[:, 3])
-    _draw_aai_panel(ax_W, ax_p, ax_alpha, log, env_meta)
+    ax_alpha = fig.add_subplot(gs_top[:, 2])
+    _draw_detection_heatmap(ax_alpha, log, env_meta)
 
     # 하단: snapshot row
     _draw_snapshots(fig, log, env_meta, n_snaps=5)
@@ -365,9 +350,11 @@ def main():
     parser.add_argument('--episode_npz', type=str, required=True)
     parser.add_argument('--out_path', type=str, required=True)
     parser.add_argument('--title', type=str, default=None)
+    parser.add_argument('--t_max', type=int, default=None,
+                        help='Truncate episode to first t_max steps')
     args = parser.parse_args()
     os.makedirs(os.path.dirname(args.out_path) or '.', exist_ok=True)
-    plot_episode(args.episode_npz, args.out_path, title=args.title)
+    plot_episode(args.episode_npz, args.out_path, title=args.title, t_max=args.t_max)
 
 
 if __name__ == '__main__':

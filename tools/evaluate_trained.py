@@ -197,7 +197,7 @@ def get_policy_factory(baseline_name, checkpoint_dir=None, device='cpu'):
 
 
 def make_env(num_uavs, num_targets, baseline_name, aai_callback=None,
-             sigma_w_sq=5.0, randomize_aai=False, **extra):
+             sigma_w_sq=0.1, randomize_aai=False, **extra):
     """
     baseline에 맞춰 use_aai/aai_callback을 결정.
 

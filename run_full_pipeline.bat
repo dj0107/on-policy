@@ -4,7 +4,7 @@ REM NALPARI: train -> eval -> visualize (Windows)
 REM Usage: run_full_pipeline.bat
 REM Prerequisites: conda activate <env>, set ANTHROPIC_API_KEY (optional)
 
-setlocal
+setlocal enabledelayedexpansion
 
 REM ============================================================
 REM Config  (edit here)
@@ -13,7 +13,7 @@ set EXP_NAME=nalpari_v1
 set NUM_AGENTS=5
 set KMP_DUPLICATE_LIB_OK=TRUE
 set PYTHONPATH=%cd%
-set NUM_ENV_STEPS=2000000
+set NUM_ENV_STEPS=1000000
 set N_ROLLOUT=4
 set N_SEEDS=3
 set N_EPISODES=3
@@ -21,17 +21,8 @@ set N_EPISODES=3
 REM Result paths
 set RESULTS_ROOT=onpolicy\scripts\results
 set TRAIN_RESULTS=%RESULTS_ROOT%\UAV\uav_tracking\mappo\%EXP_NAME%
-REM auto-detect latest run with actor.pt
-for /d %%R in ("%TRAIN_RESULTS%\run*") do (
-    if exist "%%R\models\actor.pt" set ACTIVEx=%%R
-)
-if defined ACTIVEx (
-    set CHECKPOINT_DIR=%ACTIVEx%\models
-    set TRAIN_DONE=%ACTIVEx%\training_done.txt
-) else (
-    set CHECKPOINT_DIR=%TRAIN_RESULTS%\run1\models
-    set TRAIN_DONE=%TRAIN_RESULTS%\run1\training_done.txt
-)
+set CHECKPOINT_DIR=%TRAIN_RESULTS%\latest\models
+set TRAIN_DONE=%TRAIN_RESULTS%\latest\training_done.txt
 set EVAL_OUT=evaluation\%EXP_NAME%
 set FIG_OUT=figures\%EXP_NAME%
 
@@ -87,44 +78,50 @@ REM ============================================================
 :archive_and_start_fresh
 echo.
 echo [archive] Archiving existing results...
-set TS=%DATE:/=_%
-set TS=%TS: =0%
-set ARCHIVE_DIR=_archive\%EXP_NAME%_%TS%
+for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd"') do set DATESTAMP=%%I
+set ARCHIVE_BASE=_archive\%EXP_NAME%_%DATESTAMP%
+set ARCHIVE_DIR=!ARCHIVE_BASE!
+set ARCHIVE_IDX=1
+:find_archive_slot
+if not exist "!ARCHIVE_DIR!" goto :do_archive
+set /a ARCHIVE_IDX+=1
+set ARCHIVE_DIR=!ARCHIVE_BASE! (!ARCHIVE_IDX!)
+goto :find_archive_slot
+:do_archive
 
 if exist "%TRAIN_RESULTS%" (
     if not exist "_archive" mkdir "_archive"
-    move "%TRAIN_RESULTS%" "%ARCHIVE_DIR%" 2>nul
+    move "%TRAIN_RESULTS%" "!ARCHIVE_DIR!" 2>nul
     if not errorlevel 1 (
-        echo [archive] Training results archived to: %ARCHIVE_DIR%
+        echo [archive] Training results archived to: !ARCHIVE_DIR!
     ) else (
-        echo [warn] Could not move. Cleaning instead...
-        rd /s /q "%TRAIN_RESULTS%" 2>nul
+        echo [warn] Could not move training results.
     )
 )
-if exist "%EVAL_OUT%" move "%EVAL_OUT%" "%ARCHIVE_DIR%\evaluation" 2>nul
-if exist "%FIG_OUT%" move "%FIG_OUT%" "%ARCHIVE_DIR%\figures" 2>nul
+if exist "%EVAL_OUT%" move "%EVAL_OUT%" "!ARCHIVE_DIR!\evaluation" 2>nul
+if exist "%FIG_OUT%" move "%FIG_OUT%" "!ARCHIVE_DIR!\figures" 2>nul
 echo [archive] Done. Starting fresh training...
 goto :fresh_training
 
 REM ============================================================
 REM Training entry points
 REM ============================================================
+REM PPO 안정화 옵션 — training_entry/fresh_training 모두 사용
+set "STABLE_OPTS=--lr 1e-4 --entropy_coef 0.05 --ppo_epoch 5 --num_mini_batch 4"
+
 :training_entry
 if exist "%TRAIN_DONE%" (
     echo [1/4] Skipping training ^(already complete^).
     goto :evaluation
 )
-REM 논문 충실 모드 — entropy_coef만 0.01→0.05로 올림 (정책 붕괴 방지)
-REM 나머지(lr, ppo_epoch, max_grad_norm)는 코드 기본값 그대로
-set "STABLE_OPTS=--entropy_coef 0.05"
 
 echo [1/4] Resuming training from checkpoint...
-set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 100 --use_eval %STABLE_OPTS% --resume_from %CHECKPOINT_DIR%"
+set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 150 --use_eval %STABLE_OPTS% --resume_from %CHECKPOINT_DIR%"
 goto :do_training
 
 :fresh_training
 echo [1/4] Starting fresh training... (this may take hours)
-set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 100 --use_eval %STABLE_OPTS%"
+set "TRAIN_OPTS=--env_name UAV --scenario_name uav_tracking --algorithm_name mappo --experiment_name %EXP_NAME% --num_agents %NUM_AGENTS% --num_env_steps %NUM_ENV_STEPS% --n_rollout_threads %N_ROLLOUT% --episode_length 150 --use_eval %STABLE_OPTS%"
 goto :do_training
 
 :do_training
@@ -174,6 +171,12 @@ if not defined LLM_KEY_SET (
     echo   [SKIP] llm_aai - no LLM API key set ^(ANTHROPIC_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY^).
     goto :merge
 )
+REM --- provider 자동 감지 (우선순위: deepseek > anthropic > openai > gemini) ---
+if defined DEEPSEEK_API_KEY ( set "LLM_AAI_PROVIDER=deepseek" & set "LLM_AAI_MODEL=deepseek-chat" )
+if not defined DEEPSEEK_API_KEY if defined ANTHROPIC_API_KEY ( set "LLM_AAI_PROVIDER=anthropic" & set "LLM_AAI_MODEL=claude-sonnet-4-6" )
+if not defined DEEPSEEK_API_KEY if not defined ANTHROPIC_API_KEY if defined OPENAI_API_KEY ( set "LLM_AAI_PROVIDER=openai" & set "LLM_AAI_MODEL=gpt-4o" )
+if not defined DEEPSEEK_API_KEY if not defined ANTHROPIC_API_KEY if not defined OPENAI_API_KEY if defined GEMINI_API_KEY ( set "LLM_AAI_PROVIDER=gemini" & set "LLM_AAI_MODEL=gemini-2.0-flash" )
+echo   [LLM] provider=%LLM_AAI_PROVIDER%  model=%LLM_AAI_MODEL%
 echo   [eval] llm_aai
 python tools\evaluate_trained.py --baseline llm_aai --out_dir "%EVAL_OUT%\llm_aai" --checkpoint_dir "%CHECKPOINT_DIR%" --aai_callback tools.llm_aai:default_callback --sweep_uav %SWEEP_UAV% --sweep_target %SWEEP_TARGET% --sweep_noise %SWEEP_NOISE% --sweep_tau %SWEEP_TAU% --save_episode --episode_seeds %EPISODE_SEEDS% --n_seeds %N_SEEDS% --n_episodes %N_EPISODES%
 if errorlevel 1 ( echo [ERROR] llm_aai eval failed. & goto :error )

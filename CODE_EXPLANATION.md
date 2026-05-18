@@ -199,14 +199,14 @@ UAV 하나를 나타내는 클래스. 이동, 에너지 소모, 레이더/통신
 ### __init__ (59~90줄)
 
 ```python
-        self.H = altitude     # 고도 (100m로 고정)
+        self.H = altitude     # 고도 (90m로 고정)
         self.v_max = max_speed  # 최대 속도 (10m/s)
         self.energy = max_energy  # 현재 에너지 (초기 100,000 J)
         self.max_energy = max_energy
 ```
 
 ```python
-        self.p_ut = 15.0      # 기본 송신 전력 (W)
+        self.p_ut = 1.0       # 기본 송신 전력 (W) — AAI가 매 스텝 재설정
         self.tau_s_ratio = 0.5  # 센싱 시간 비율 (전체 dt 중 50%)
 ```
 AAI가 p_ut를 조절. tau_s_ratio로 센싱 시간 τ_s = 0.5·dt.
@@ -413,10 +413,10 @@ max(..., 0)은 음수가 되는 것 방지.
 타겟이 이 근처에 있으면 W_kt가 올라감 (우선 추적 대상).
 
 ```python
-        self.snr_threshold_dB = 13.0
+        self.snr_threshold_dB = 20.0
         self.snr_threshold = 10 ** (self.snr_threshold_dB / 10.0)
 ```
-13 dB = linear 20.0. SNR이 이 값 이상이어야 탐지 성공(alpha=1).
+20 dB = linear 100.0. SNR이 이 값 이상이어야 탐지 성공(alpha=1).
 
 ```python
         self.R_c_threshold = 1.218e6
@@ -429,13 +429,15 @@ max(..., 0)은 음수가 되는 것 방지.
 UAV 간 최소 거리 5m. 이 이하면 충돌로 간주.
 
 ```python
-        self.lam1 = 1.0   # 추적 정확도(F_kt) 가중치
-        self.lam2 = 5.0   # 미탐지(prod(1-α)) 가중치
-        self.lam3 = 10.0  # 충돌 페널티 가중치
-        self.lam4 = 1.0   # 통신 속도 부족 페널티
-        self.lam5 = 5.0   # 타겟 완전 미탐지 페널티
+        self.lam1 = 2.0    # F_kt 계수
+        self.lam2 = 15.0   # prod_loss 계수 (swarm 전체 실패 페널티)
+        self.lam3 = 0.5    # 충돌/경계 페널티
+        self.lam4 = 0.0    # 통신 페널티 (삭제됨 — 항상 0)
+        self.lam5 = 8.0    # untracked 페널티 (어떤 UAV도 미탐지 시)
+        self.lam6 = 8.0    # r_approach shaping 계수 (논문에 없음)
+        self.lam7 = 15.0   # r_detect 양수 보상 계수 (논문에 없음)
 ```
-보상 함수(식 32)의 λ 가중치들.
+보상 함수의 λ 가중치들. lam6/lam7은 논문 외 추가 항목.
 
 ```python
         self.sigma_r0_sq = 10.0
@@ -449,7 +451,7 @@ EKF 측정 잡음 파라미터.
 - floor 값들: 수치 안정성용 하한선
 
 ```python
-        self.uavs = [UAV(i, [0, 0], altitude=100.0) for i in range(self.num_uavs)]
+        self.uavs = [UAV(i, [0, 0], altitude=90.0) for i in range(self.num_uavs)]
         self.targets = [Target(i, [0, 0], [0, 0]) for i in range(self.num_targets)]
         self.assignment = {u: 0 for u in range(self.num_uavs)}
 ```
@@ -458,7 +460,7 @@ assignment: {UAV번호: 담당타겟번호}
 
 ```python
         dummy_local, dummy_global = self._get_obs()
-        local_dim = len(dummy_local[0])   # 17 (num_targets=2일 때)
+        local_dim = len(dummy_local[0])   # 19 (num_targets=2일 때)
         global_dim = len(dummy_global)    # 31 (num_targets=2일 때)
 ```
 관측 공간 크기를 자동 계산하기 위해 더미 관측 한 번 생성.
@@ -497,12 +499,16 @@ assignment: {UAV번호: 담당타겟번호}
 맵 중앙 (0,0)에 BS(기지국) 위치 고정.
 
 ```python
-        self.uavs = [
-            UAV(i, [np.random.uniform(-50, 50), np.random.uniform(-50, 50)], altitude=100.0)
-            for i in range(self.num_uavs)
-        ]
+        # UAV를 타겟 기준 10~80m 반경에 무작위 배치 (30회 충돌 회피 재시도)
+        for u_id, uav in enumerate(self.uavs):
+            target = self.targets[self.assignment[u_id]]
+            for _ in range(30):
+                angle = np.random.uniform(0, 2 * np.pi)
+                r = np.random.uniform(10.0, 80.0)
+                pos = target.pos + r * np.array([np.cos(angle), np.sin(angle)])
+                ...
 ```
-UAV들을 중앙 근처(±50m)에 무작위 배치.
+UAV들을 담당 타겟 주위 10~80m 반경에 무작위 배치. 탐지 가능 거리(≈103m) 안에서 초기 탐지 보장.
 
 ```python
         self.targets = [
@@ -512,7 +518,7 @@ UAV들을 중앙 근처(±50m)에 무작위 배치.
             for i in range(self.num_targets)
         ]
 ```
-타겟들을 맵의 60% 범위(±300m)에 무작위 배치, 초기 속도 ±2 m/s.
+타겟들을 맵의 60% 범위(±90m)에 무작위 배치, 초기 속도 ±2 m/s.
 
 ```python
         for target in self.targets:
@@ -653,7 +659,7 @@ MAPPO가 다양한 AAI 출력 범위에 적응하도록 함 (학습 시에만 �
 
 ```python
     def _get_obs(self):
-        POS_SCALE = 500.0    # 위치 정규화 (맵 크기)
+        POS_SCALE = 150.0    # 위치 정규화 (맵 half-width)
         E_SCALE = 100000.0   # 에너지 정규화 (최대 에너지)
         F_SCALE = 1000.0     # PCRLB 정규화 (최대값)
         V_SCALE = 10.0       # 속도 정규화 (최대 속도)
@@ -787,8 +793,9 @@ BFIM 업데이트의 핵심 수식: J += H^T · R^{-1} · H
             target.J_matrix = prior_J + target.measurement_info
 ```
 **BFIM 재귀 업데이트 (식 7)**:  
-J_{t} = (F^{-T} · J_{t-1} · F^{-1} + Q^{-1})^{-1} + Σ_u(H^T·R^{-1}·H)  
-`prior_J`가 예측(prediction) 단계의 BFIM.
+J_pred = [F · J_{t-1}^{-1} · F^T + Q]^{-1}  (Tichavsky 1998 표준)
+J_t = J_pred + Σ_u(H^T·R^{-1}·H)  
+`J_pred`가 예측(prediction) 단계의 BFIM.
 
 ```python
             PCRLB = np.linalg.inv(target.J_matrix)
@@ -796,7 +803,7 @@ J_{t} = (F^{-T} · J_{t-1} · F^{-1} + Q^{-1})^{-1} + Σ_u(H^T·R^{-1}·H)
 ```
 **PCRLB 추적 오차 계산 (식 F_kt)**:  
 F_kt = tr(Λ · J^{-1} · Λ^T)  
-Λ = diag([1,1,dt,dt]) → 위치 오차에 더 집중. 1000으로 clipping.
+Λ = diag([1,1,0,0]) → 위치 성분만 측정. 1000으로 clipping.
 
 ---
 
