@@ -18,12 +18,13 @@
   num_targets         = 2
   dt                  = 1.0  [s]
   max_steps           = 150
+  target_max_speed    = 6.0  [m/s]  (변경: 8→6)
   map                 = [-150, 150] x [-150, 150]  [m]
 
 ## UAV 물리 파라미터 (UAV class)
   max_speed           = 10.0  [m/s]
   max_energy          = 100,000  [J]
-  altitude (H)        = 90.0  [m]
+  altitude (H)        = 80.0  [m]
   tau_s_ratio         = 0.5   (센싱:통신 시간 비율 = 0.5:0.5)
   p_ut (초기값)       = 1.0   [W]  (AAI: dist≤200m→1W, dist>200m→2W)
                                    ※ 구버전 근거리 0.5W 제거 — H=90m에서 slant≥90m, SNR=90<100 탐지불가
@@ -55,7 +56,7 @@
   sigma_r0_sq         = 10.0
   sigma_theta0_sq     = 1e-4
   Lambda              = diag([1, 1, 0, 0])  (위치 성분만, velocity 제외)
-  F_kt 항             = lam1 × tanh(F_kt/1000)  상한=10.0, 하한=0  (발산 불가)
+  F_kt 캡             = 없음  (lam1 × F_kt/100, 후보1 원본 복원)
 
 ## 위험구역 (Critical Zones, num_critical_zones=2 — 앞 2개만 사용)
   Zone 0 = [100, 100]
@@ -69,7 +70,7 @@
 
   파라미터  │  run1–run3  │  run4     │  run1*    │  현재 (최신)
   ──────────┼─────────────┼───────────┼───────────┼──────────────
-  lam1      │  1.0        │  1.0      │  1.0      │  10.0  ← tanh soft-cap (F_kt/1000)
+  lam1      │  1.0        │  1.0      │  1.0      │  2.0
   lam2      │  10.0       │  10.0     │  10.0     │  15.0
   lam3      │  1.0        │  1.0      │  0.5      │  1.0
   lam4      │  1.0        │  1.0      │  1.0      │  0.0   ← 통신 페널티 삭제

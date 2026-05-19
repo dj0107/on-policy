@@ -48,7 +48,7 @@ class Target:
                 self.pos[d] = map_max
                 self.velocity[d] = -abs(self.velocity[d])
         v_norm = np.linalg.norm(self.velocity)
-        v_max_target = 8.0
+        v_max_target = 6.0
         if v_norm > v_max_target:
             self.velocity = self.velocity / v_norm * v_max_target
         self.S_global = np.concatenate([self.pos, self.velocity])
@@ -181,7 +181,7 @@ class UAVTrackingEnv(gym.Env):
         self.map_min, self.map_max = -150.0, 150.0
 
         # 보상 가중치
-        self.lam1 = 10.0   # 추적 정확도 (F_kt, tanh soft-cap)
+        self.lam1 = 2.0    # 추적 정확도 (F_kt)
         self.lam2 = 15.0   # swarm 전체 실패 페널티
         self.lam3 = 1.0    # 충돌/경계 페널티
         self.lam4 = 0.0    # 통신 페널티 (삭제됨)
@@ -196,7 +196,7 @@ class UAVTrackingEnv(gym.Env):
         self.sigma_theta_sq_floor = 1e-7
         self._precompute_ekf_matrices()
 
-        self.uavs = [UAV(i, [0, 0], altitude=90.0) for i in range(self.num_uavs)]
+        self.uavs = [UAV(i, [0, 0], altitude=80.0) for i in range(self.num_uavs)]
         self.targets = [Target(i, [0, 0], [0, 0]) for i in range(self.num_targets)]
         self.assignment = {u: 0 for u in range(self.num_uavs)}
 
@@ -271,7 +271,7 @@ class UAVTrackingEnv(gym.Env):
                 uav_positions[u_idx] = pos
 
         self.uavs = [
-            UAV(i, uav_positions[i].tolist(), altitude=90.0)
+            UAV(i, uav_positions[i].tolist(), altitude=80.0)
             for i in range(self.num_uavs)
         ]
 
@@ -605,7 +605,7 @@ class UAVTrackingEnv(gym.Env):
                 prod_loss *= (1 - a)
                 n_detected += a
             r_tracking -= target.W_kt * (
-                self.lam1 * np.tanh(target.F_kt / 1000.0) + self.lam2 * prod_loss
+                self.lam1 * (target.F_kt / 100.0) + self.lam2 * prod_loss
             )
             if n_detected == 0:
                 r_untracked -= self.lam5
