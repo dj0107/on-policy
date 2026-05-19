@@ -23,7 +23,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
-from matplotlib.collections import LineCollection
 import matplotlib.colors as mcolors
 
 plt.rcParams.update({
@@ -89,22 +88,18 @@ def _draw_map_layout(ax, log, env_meta, time_range=None):
     ax.text(bs_pos[0], bs_pos[1] - 35, 'BS', ha='center', va='top',
             fontsize=9, color=BS_COLOR, fontweight='bold')
 
-    # UAV 궤적: 시간에 따라 점점 진해지는 line (fade-in)
+    # UAV 궤적: 시간에 따라 점점 진해지는 scatter dots
     uav_colors = _make_uav_colors(num_uavs)
     for u in range(num_uavs):
         traj = uav_pos[t0:t1, u, :]   # (T, 2)
-        # LineCollection으로 시간에 따른 alpha 변화
-        segs = np.stack([traj[:-1], traj[1:]], axis=1)  # (T-1, 2, 2)
-        alphas = np.linspace(0.15, 0.95, len(segs))
-        lc = LineCollection(segs, colors=[(*uav_colors[u][:3], a) for a in alphas],
-                            linewidths=1.4, capstyle='round')
-        ax.add_collection(lc)
-        # 시작/끝 마커
-        ax.plot(traj[0, 0], traj[0, 1], 'o', color=uav_colors[u],
-                markersize=5, markeredgecolor='white', markeredgewidth=0.8,
-                alpha=0.7, zorder=4)
+        T_len = len(traj)
+        alphas = np.linspace(0.25, 0.92, T_len)
+        c_arr = np.array([[*uav_colors[u][:3], a] for a in alphas])
+        ax.scatter(traj[:, 0], traj[:, 1], c=c_arr, s=16,
+                   linewidths=0, zorder=3, marker='o')
+        # 끝 마커 (삼각형)
         ax.plot(traj[-1, 0], traj[-1, 1], '^', color=uav_colors[u],
-                markersize=10, markeredgecolor='white', markeredgewidth=1.2,
+                markersize=11, markeredgecolor='white', markeredgewidth=1.2,
                 zorder=6, label=f'UAV {u}')
 
     # 타겟 궤적: 진한 곡선 + 추정치 (점선)
@@ -184,11 +179,7 @@ def _draw_F_kt_timeline(ax, log, env_meta):
     F = log['F_kt']  # (T, K)
     T, K = F.shape
     ts = np.arange(T)
-    # log 정규화: quality = (1 - log10(1+F_kt)/log10(1001)) * 100
-    # 선형 1000-cap 대비 중간 범위(10~100 m²)가 잘 보임
-    quality = np.maximum(0.0,
-        (1.0 - np.log10(1.0 + np.clip(F, 0.0, 1e6)) / np.log10(1001.0)) * 100.0
-    )
+    quality = np.maximum(0.0, (1.0 - np.clip(F, 0.0, 1000.0) / 1000.0) * 100.0)
     tgt_colors = _make_target_colors(K)
     for k in range(K):
         ax.plot(ts, quality[:, k], color=tgt_colors[k], linewidth=1.6,

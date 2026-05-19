@@ -38,14 +38,16 @@ plt.rcParams.update({
     'savefig.bbox': 'tight',
 })
 
-# 메서드별 색상 (일관된 톤)
+# 메서드별 색상/스타일 (논문 그래프 기준)
 METHOD_STYLE = {
-    'mappo+aai':    {'color': '#1f5fa8', 'marker': 'o', 'linestyle': '-',  'label': 'MAPPO + AAI'},
-    'mappo':        {'color': '#3b8edb', 'marker': 's', 'linestyle': '-',  'label': 'MAPPO (no AAI)'},
-    'naive_greedy': {'color': '#e07a3c', 'marker': '^', 'linestyle': '--', 'label': 'Naive greedy'},
-    'random':       {'color': '#888888', 'marker': 'x', 'linestyle': ':',  'label': 'Random'},
-    'hover':        {'color': '#9c27b0', 'marker': 'D', 'linestyle': '-.', 'label': 'Hover (no movement)'},
+    'mappo+aai':    {'color': '#1f5fa8', 'marker': 'o', 'linestyle': '-',  'label': 'MAPPO + AAI (Ours)', 'lw': 2.5, 'ms': 9},
+    'mappo':        {'color': '#3b8edb', 'marker': 's', 'linestyle': '-',  'label': 'MAPPO (no AAI)',      'lw': 1.5, 'ms': 7},
+    'naive_greedy': {'color': '#e07a3c', 'marker': '^', 'linestyle': '--', 'label': 'Naive greedy',        'lw': 1.7, 'ms': 7},
+    'random':       {'color': '#888888', 'marker': 'x', 'linestyle': ':',  'label': 'Random',              'lw': 1.5, 'ms': 7},
+    'hover':        {'color': '#9c27b0', 'marker': 'D', 'linestyle': '-.', 'label': 'Hover (static)',      'lw': 1.7, 'ms': 7},
 }
+# 핵심 3개 비교군만 표시 (논문 주장에 집중)
+SHOW_METHODS = ('mappo+aai', 'naive_greedy', 'hover')
 
 # Sweep dir → (x label for plot, plot title)
 SWEEP_INFO = {
@@ -89,129 +91,105 @@ def load_sweep_dir(sweep_dir):
     return results_by_method
 
 
+def _shared_legend(fig, axes, bottom_margin=0.10):
+    """모든 axes에서 핵심 메서드 handles를 모아 figure 하단에 공유 범례 배치."""
+    seen, handles, labels = set(), [], []
+    for ax in axes:
+        for h, l in zip(*ax.get_legend_handles_labels()):
+            if l not in seen:
+                seen.add(l)
+                handles.append(h)
+                labels.append(l)
+    fig.legend(handles, labels,
+               loc='lower center', ncol=len(handles),
+               bbox_to_anchor=(0.5, 0.0),
+               frameon=True, framealpha=0.92,
+               fontsize=10, markerscale=1.1)
+    fig.tight_layout(rect=[0, bottom_margin, 1, 1])
+
+
 def plot_sweep_comparison(sweep_dir, out_path, x_label=None, title=None):
-    """y=총에너지, x=조건. 메서드별 곡선 + 보조 패널 (탐지율/충돌)."""
-    data = load_sweep_dir(sweep_dir)
+    """3개 핵심 패널: 총에너지 / 탐지율 / PCRLB 추적 불확실성."""
+    data = {m: v for m, v in load_sweep_dir(sweep_dir).items() if m in SHOW_METHODS}
     if not data:
         print(f'[skip] no data in {sweep_dir}')
         return
 
-    fig, axes = plt.subplots(1, 5, figsize=(22, 4.2))
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5.5))
+    any_runs = next(iter(data.values()))
+    xlbl = x_label or any_runs[0]['x_label']
 
-    # 패널 1: total energy
+    # 패널 1: 총 에너지 (±std error bar)
     ax = axes[0]
-    for method, runs in data.items():
-        style = METHOD_STYLE.get(method, {'color': 'k', 'marker': 'o',
-                                          'linestyle': '-', 'label': method})
+    for method in SHOW_METHODS:
+        if method not in data:
+            continue
+        style = METHOD_STYLE[method]
+        runs = data[method]
         xs = [r['x'] for r in runs]
         ys = [r['energy_total_mean'] for r in runs]
         es = [r['energy_total_std'] for r in runs]
         ax.errorbar(xs, ys, yerr=es,
                     color=style['color'], marker=style['marker'],
                     linestyle=style['linestyle'], label=style['label'],
-                    capsize=3, markersize=7, linewidth=1.5)
-    ax.set_xlabel(x_label or runs[0]['x_label'])
+                    capsize=4, markersize=style['ms'], linewidth=style['lw'])
+    ax.set_xlabel(xlbl)
     ax.set_ylabel('Total energy per episode  [J]')
     ax.set_title('Total energy', fontweight='semibold')
-    ax.legend(loc='best')
 
-    # 패널 2: detection rate + collision  (twin axis)
+    # 패널 2: 탐지율
     ax = axes[1]
-    ax2 = ax.twinx()
-    for method, runs in data.items():
-        style = METHOD_STYLE.get(method, {'color': 'k', 'marker': 'o',
-                                          'linestyle': '-', 'label': method})
+    for method in SHOW_METHODS:
+        if method not in data:
+            continue
+        style = METHOD_STYLE[method]
+        runs = data[method]
         xs = [r['x'] for r in runs]
         det = [r['detection_rate'] * 100 for r in runs]
-        col = [r['collision_count'] for r in runs]
-        ax.plot(xs, det, color=style['color'], marker=style['marker'],
-                linestyle='-', label=style['label'] + ' (det.)',
-                markersize=6, linewidth=1.5)
-        ax2.plot(xs, col, color=style['color'], marker=style['marker'],
-                 linestyle=':', alpha=0.55, markersize=5, linewidth=1.0)
-    ax.set_xlabel(x_label or runs[0]['x_label'])
-    ax.set_ylabel('Detection rate  [%]', color='#222')
-    ax2.set_ylabel('Avg. collisions / episode', color='#666')
+        ax.plot(xs, det,
+                color=style['color'], marker=style['marker'],
+                linestyle=style['linestyle'], label=style['label'],
+                markersize=style['ms'], linewidth=style['lw'])
+    ax.set_xlabel(xlbl)
+    ax.set_ylabel('Detection rate  [%]')
     ax.set_ylim(-5, 105)
-    ax.set_title('Detection rate', fontweight='semibold')
-    ax2.tick_params(axis='y', colors='#666')
-    ax.legend(loc='lower left', fontsize=9)
+    ax.set_title('Target detection rate', fontweight='semibold')
 
-    # 패널 3: F_kt → tracking quality  (0%=최악, 100%=완벽)
+    # 패널 3: PCRLB 추적 불확실성 F_kt (↓ better)
     ax = axes[2]
-    for method, runs in data.items():
-        style = METHOD_STYLE.get(method, {'color': 'k', 'marker': 'o',
-                                          'linestyle': '-', 'label': method})
+    for method in SHOW_METHODS:
+        if method not in data:
+            continue
+        style = METHOD_STYLE[method]
+        runs = data[method]
         xs = [r['x'] for r in runs]
-        quality = [(1.0 - min(r['F_kt_mean'], 1000.0) / 1000.0) * 100.0 for r in runs]
-        ax.plot(xs, quality, color=style['color'], marker=style['marker'],
+        ys = [r['F_kt_mean'] for r in runs]
+        ax.plot(xs, ys,
+                color=style['color'], marker=style['marker'],
                 linestyle=style['linestyle'], label=style['label'],
-                markersize=6, linewidth=1.5)
-    ax.set_xlabel(x_label or runs[0]['x_label'])
-    ax.set_ylabel('Tracking quality  [%]')
-    ax.set_ylim(-5, 105)
-    ax.set_title('Tracking quality (F_kt)', fontweight='semibold')
-    ax.legend(loc='best', fontsize=9)
-
-    # 패널 4: tracking error (실제 ||S_est - S_true||) — F_kt가 saturation되는 한계 보완
-    ax = axes[3]
-    for method, runs in data.items():
-        style = METHOD_STYLE.get(method, {'color': 'k', 'marker': 'o',
-                                          'linestyle': '-', 'label': method})
-        xs = [r['x'] for r in runs]
-        ys = [r['tracking_err_mean'] for r in runs]
-        ax.plot(xs, ys, color=style['color'], marker=style['marker'],
-                linestyle=style['linestyle'], label=style['label'],
-                markersize=6, linewidth=1.5)
-    ax.set_xlabel(x_label or runs[0]['x_label'])
-    ax.set_ylabel(r'Mean $\|S_{est} - S_{true}\|$  [m]')
-    ax.set_title('Estimation error', fontweight='semibold')
-    ax.legend(loc='best', fontsize=9)
-
-    # 패널 5: per-step energy curve (한 condition, 모든 method 비교)
-    ax = axes[4]
-    if len(data):
-        # 중간 condition을 골라 보여줌
-        any_method = next(iter(data))
-        n_cond = len(data[any_method])
-        mid_idx = n_cond // 2
-        mid_x = data[any_method][mid_idx]['x']
-        for method, runs in data.items():
-            run = next((r for r in runs if abs(r['x'] - mid_x) < 1e-9), None)
-            if run is None:
-                continue
-            style = METHOD_STYLE.get(method, {'color': 'k', 'marker': 'o',
-                                              'linestyle': '-', 'label': method})
-            mean = run['energy_per_step_mean']
-            std = run['energy_per_step_std']
-            ts = np.arange(len(mean))
-            ax.plot(ts, mean, color=style['color'], linestyle=style['linestyle'],
-                    label=style['label'], linewidth=1.5)
-            ax.fill_between(ts, mean - std, mean + std,
-                            color=style['color'], alpha=0.15)
-        ax.set_xlabel('Time step  $t$')
-        ax.set_ylabel('Energy / step  [J]')
-        ax.set_title(f'Per-step energy (at {x_label}={mid_x})', fontweight='semibold')
-        ax.legend(loc='best', fontsize=9)
+                markersize=style['ms'], linewidth=style['lw'])
+    ax.set_xlabel(xlbl)
+    ax.set_ylabel(r'Mean $\bar{F}_{kt}$  (↓ better)')
+    ax.set_title('PCRLB tracking uncertainty', fontweight='semibold')
 
     fig.suptitle(title or os.path.basename(sweep_dir),
-                 fontsize=14, fontweight='bold', y=1.02)
-    fig.tight_layout()
+                 fontsize=14, fontweight='bold')
+    _shared_legend(fig, axes, bottom_margin=0.12)
     fig.savefig(out_path)
     plt.close(fig)
     print(f'[saved] {out_path}')
 
 
 def plot_overview(results_dir, out_path):
-    """모든 sweep을 한 figure에 모아서 (y=energy)만 보여주는 요약."""
+    """모든 sweep을 한 figure에 모아서 (y=energy) 요약 — 핵심 3개 메서드."""
     n = len(SWEEP_INFO)
-    fig, axes = plt.subplots(1, n, figsize=(4.0 * n, 3.8))
+    fig, axes = plt.subplots(1, n, figsize=(5.5 * n, 5.0))
     if n == 1:
         axes = [axes]
 
     for ax, (sweep_name, (xlbl, ttl)) in zip(axes, SWEEP_INFO.items()):
         sweep_dir = os.path.join(results_dir, sweep_name)
-        data = load_sweep_dir(sweep_dir)
+        data = {m: v for m, v in load_sweep_dir(sweep_dir).items() if m in SHOW_METHODS}
         if not data:
             ax.text(0.5, 0.5, f'(no data:\n{sweep_name})',
                     ha='center', va='center', transform=ax.transAxes,
@@ -220,63 +198,65 @@ def plot_overview(results_dir, out_path):
             ax.set_ylabel('Total energy [J]')
             ax.set_title(ttl, fontweight='semibold')
             continue
-        for method, runs in data.items():
-            style = METHOD_STYLE.get(method, {'color': 'k', 'marker': 'o',
-                                              'linestyle': '-', 'label': method})
+        for method in SHOW_METHODS:
+            if method not in data:
+                continue
+            style = METHOD_STYLE[method]
+            runs = data[method]
             xs = [r['x'] for r in runs]
             ys = [r['energy_total_mean'] for r in runs]
             es = [r['energy_total_std'] for r in runs]
             ax.errorbar(xs, ys, yerr=es,
                         color=style['color'], marker=style['marker'],
                         linestyle=style['linestyle'], label=style['label'],
-                        capsize=3, markersize=6, linewidth=1.4)
+                        capsize=4, markersize=style['ms'], linewidth=style['lw'])
         ax.set_xlabel(xlbl)
         ax.set_ylabel('Total energy [J]')
         ax.set_title(ttl, fontweight='semibold')
-        ax.legend(loc='best', fontsize=9)
 
     fig.suptitle('Energy comparison across experimental conditions',
-                 fontsize=14, fontweight='bold', y=1.03)
-    fig.tight_layout()
+                 fontsize=14, fontweight='bold')
+    _shared_legend(fig, axes, bottom_margin=0.14)
     fig.savefig(out_path)
     plt.close(fig)
     print(f'[saved] {out_path}')
 
 
 def plot_fkt_overview(results_dir, out_path):
-    """모든 sweep을 한 figure에 모아서 F_kt → tracking quality [%] 비교."""
+    """모든 sweep에서 PCRLB F_kt 비교 — 핵심 3개 메서드."""
     n = len(SWEEP_INFO)
-    fig, axes = plt.subplots(1, n, figsize=(4.0 * n, 3.8))
+    fig, axes = plt.subplots(1, n, figsize=(5.5 * n, 5.0))
     if n == 1:
         axes = [axes]
 
     for ax, (sweep_name, (xlbl, ttl)) in zip(axes, SWEEP_INFO.items()):
         sweep_dir = os.path.join(results_dir, sweep_name)
-        data = load_sweep_dir(sweep_dir)
+        data = {m: v for m, v in load_sweep_dir(sweep_dir).items() if m in SHOW_METHODS}
         if not data:
             ax.text(0.5, 0.5, f'(no data:\n{sweep_name})',
                     ha='center', va='center', transform=ax.transAxes,
                     color='#999', fontsize=11)
             ax.set_xlabel(xlbl)
-            ax.set_ylabel(r'$F_{kt}$  (lower = better)')
+            ax.set_ylabel(r'Mean $\bar{F}_{kt}$  (↓ better)')
             ax.set_title(ttl, fontweight='semibold')
             continue
-        for method, runs in data.items():
-            style = METHOD_STYLE.get(method, {'color': 'k', 'marker': 'o',
-                                              'linestyle': '-', 'label': method})
+        for method in SHOW_METHODS:
+            if method not in data:
+                continue
+            style = METHOD_STYLE[method]
+            runs = data[method]
             xs = [r['x'] for r in runs]
             ys = [r['F_kt_mean'] for r in runs]
             ax.plot(xs, ys, color=style['color'], marker=style['marker'],
                     linestyle=style['linestyle'], label=style['label'],
-                    markersize=6, linewidth=1.4)
+                    markersize=style['ms'], linewidth=style['lw'])
         ax.set_xlabel(xlbl)
-        ax.set_ylabel(r'$F_{kt}$  (lower = better)')
+        ax.set_ylabel(r'Mean $\bar{F}_{kt}$  (↓ better)')
         ax.set_title(ttl, fontweight='semibold')
-        ax.legend(loc='best', fontsize=9)
 
-    fig.suptitle(r'$F_{kt}$ across experimental conditions',
-                 fontsize=14, fontweight='bold', y=1.03)
-    fig.tight_layout()
+    fig.suptitle(r'PCRLB tracking uncertainty $\bar{F}_{kt}$ across conditions',
+                 fontsize=14, fontweight='bold')
+    _shared_legend(fig, axes, bottom_margin=0.14)
     fig.savefig(out_path)
     plt.close(fig)
     print(f'[saved] {out_path}')

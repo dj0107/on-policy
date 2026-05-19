@@ -102,10 +102,10 @@ def run_episode(env, policy_fn, log_episode=True):
         obs, share_obs, reward, dones, infos = env.step(action)
         energy_per_step.append(sum(u.last_e_tot for u in env.uavs))
         rewards.append(infos[0]['team_reward'])
-        for u in env.uavs:
-            for k, alp in u.is_detected_per_target.items():
-                detect_total += alp
-                detect_count += 1
+        for k_idx in range(env.num_targets):
+            any_det = int(any(u.is_detected_per_target.get(k_idx, 0) for u in env.uavs))
+            detect_total += any_det
+            detect_count += 1
         collisions_total += infos[0]['n_collisions']
         # 미탐지 카운트
         for k_idx in range(env.num_targets):

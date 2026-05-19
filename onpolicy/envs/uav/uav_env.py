@@ -181,7 +181,7 @@ class UAVTrackingEnv(gym.Env):
         self.map_min, self.map_max = -150.0, 150.0
 
         # 보상 가중치
-        self.lam1 = 2.0    # 추적 정확도 (F_kt)
+        self.lam1 = 10.0   # 추적 정확도 (F_kt, tanh soft-cap)
         self.lam2 = 15.0   # swarm 전체 실패 페널티
         self.lam3 = 1.0    # 충돌/경계 페널티
         self.lam4 = 0.0    # 통신 페널티 (삭제됨)
@@ -605,7 +605,7 @@ class UAVTrackingEnv(gym.Env):
                 prod_loss *= (1 - a)
                 n_detected += a
             r_tracking -= target.W_kt * (
-                self.lam1 * (target.F_kt / 100.0) + self.lam2 * prod_loss
+                self.lam1 * np.tanh(target.F_kt / 1000.0) + self.lam2 * prod_loss
             )
             if n_detected == 0:
                 r_untracked -= self.lam5

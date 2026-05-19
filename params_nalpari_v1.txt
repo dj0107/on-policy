@@ -55,7 +55,7 @@
   sigma_r0_sq         = 10.0
   sigma_theta0_sq     = 1e-4
   Lambda              = diag([1, 1, 0, 0])  (위치 성분만, velocity 제외)
-  F_kt 캡             = 1000.0
+  F_kt 항             = lam1 × tanh(F_kt/1000)  상한=10.0, 하한=0  (발산 불가)
 
 ## 위험구역 (Critical Zones, num_critical_zones=2 — 앞 2개만 사용)
   Zone 0 = [100, 100]
@@ -69,7 +69,7 @@
 
   파라미터  │  run1–run3  │  run4     │  run1*    │  현재 (최신)
   ──────────┼─────────────┼───────────┼───────────┼──────────────
-  lam1      │  1.0        │  1.0      │  1.0      │  2.0
+  lam1      │  1.0        │  1.0      │  1.0      │  10.0  ← tanh soft-cap (F_kt/1000)
   lam2      │  10.0       │  10.0     │  10.0     │  15.0
   lam3      │  1.0        │  1.0      │  0.5      │  1.0
   lam4      │  1.0        │  1.0      │  1.0      │  0.0   ← 통신 페널티 삭제
@@ -79,7 +79,7 @@
 
   ## 보상 항목 (현재 기준, per step)
     r_energy    = -total_step_energy / 100
-    r_tracking  = sum_k[ -W_kt[k] * (lam1 * F_kt[k]/100 + lam2 * prod_loss[k]) ]
+    r_tracking  = sum_k[ -W_kt[k] * (lam1 * tanh(F_kt[k]/1000) + lam2 * prod_loss[k]) ]
                   prod_loss[k] = ∏_u(1 - alpha_uk)  (어느 UAV든 탐지 시 0)
     r_collision = -lam3 * (충돌 수 + 경계 위반)
     r_comm      = -lam4 * (1 - R_c/R_c_threshold)               (통신 불량 시, lam4=0)
