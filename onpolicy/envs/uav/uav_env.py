@@ -152,8 +152,17 @@ class UAVTrackingEnv(gym.Env):
                  use_aai=True, aai_callback=None,
                  randomize_aai=False,
                  sigma_w_sq=0.1, log_episode=False,
-                 num_critical_zones=2):
+                 num_critical_zones=2,
+                 aai_ema_alpha=0.2):
+        """
+        aai_ema_alpha: AAI 출력의 EMA 계수.
+            1.0 = EMA 없음 (원본 동작, 매 step 새 값 즉시 반영)
+            0.2 = 새 값 20%만 반영, 80%는 이전 값 유지 (부드럽게 변화)
+            0.0 = 절대 안 바뀜 (초기값 고정)
+            학습 시 randomize_aai=True이면 자동으로 우회됨.
+        """
         super(UAVTrackingEnv, self).__init__()
+        self.aai_ema_alpha = aai_ema_alpha
         self.num_uavs = num_uavs
         self.num_targets = num_targets
         self.dt = dt
@@ -278,6 +287,11 @@ class UAVTrackingEnv(gym.Env):
         for target in self.targets:
             target.d_Z_kt = min(np.linalg.norm(target.pos - cz) for cz in self.critical_zones)
 
+        # EMA 버퍼 초기화 (이전 에피소드의 _aai_prev_* 잔재 제거)
+        for attr in list(vars(self).keys()):
+            if attr.startswith('_aai_prev_'):
+                delattr(self, attr)
+
         self._invoke_aai()
 
         if self.log_episode:
@@ -302,6 +316,16 @@ class UAVTrackingEnv(gym.Env):
         return np.clip(x, -1e4, 1e4)
 
     def _invoke_aai(self):
+        # ─────────────────────────────────────────────────────────────────
+        # EMA 처리 (길 3): AAI가 매 step 호출되더라도, 출력값이 부드럽게 바뀌도록
+        # 새 raw 값을 _aai_buf_*에 받고, 실제 적용은 이전 값과 EMA 가중평균.
+        # alpha=1.0 이면 EMA 없음(원본 동작), 0.0이면 절대 안 바뀜.
+        # 학습 시 randomize_aai=True인 경우엔 매 step 완전 새 값이 필요하므로
+        # EMA 우회. 평가/실제 운용 시에만 적용.
+        # ─────────────────────────────────────────────────────────────────
+        ema_alpha = getattr(self, 'aai_ema_alpha', 0.2)  # 0.2 = "20%만 새 값 반영"
+
+        # 새 값 산출 (기존 로직 그대로)
         if self.aai_callback is not None:
             self.aai_callback(self)
             self._build_assignment()
@@ -317,11 +341,37 @@ class UAVTrackingEnv(gym.Env):
             self._build_assignment()
 
         if self.randomize_aai:
+            # 학습 중 domain randomization: EMA 우회, 매 step 완전 새 값
             for t in self.targets:
                 t.W_kt = float(np.random.uniform(0.5, 3.5))
                 t.epsilon_kt = float(np.random.uniform(1.0, 10.0))
             for u in self.uavs:
                 u.p_ut = float(np.random.uniform(0.3, 3.0))
+            # randomize 중에는 _aai_prev_* 초기화 X (EMA 비활성)
+            return
+
+        # EMA 적용: 첫 step이면 그대로, 이후엔 이전 값과 섞기
+        if ema_alpha < 1.0 and self.time_slot > 0:
+            for t in self.targets:
+                key_W = f'_aai_prev_W_{t.id}'
+                key_eps = f'_aai_prev_eps_{t.id}'
+                if hasattr(self, key_W):
+                    t.W_kt = ema_alpha * t.W_kt + (1 - ema_alpha) * getattr(self, key_W)
+                    t.epsilon_kt = ema_alpha * t.epsilon_kt + (1 - ema_alpha) * getattr(self, key_eps)
+                setattr(self, key_W, float(t.W_kt))
+                setattr(self, key_eps, float(t.epsilon_kt))
+            for u in self.uavs:
+                key_p = f'_aai_prev_p_{u.id}'
+                if hasattr(self, key_p):
+                    u.p_ut = ema_alpha * u.p_ut + (1 - ema_alpha) * getattr(self, key_p)
+                setattr(self, key_p, float(u.p_ut))
+        else:
+            # 첫 step: 현재 값을 prev로 초기화만
+            for t in self.targets:
+                setattr(self, f'_aai_prev_W_{t.id}', float(t.W_kt))
+                setattr(self, f'_aai_prev_eps_{t.id}', float(t.epsilon_kt))
+            for u in self.uavs:
+                setattr(self, f'_aai_prev_p_{u.id}', float(u.p_ut))
 
     def _build_assignment(self):
         unassigned = list(range(self.num_uavs))
@@ -604,8 +654,17 @@ class UAVTrackingEnv(gym.Env):
                 a = uav.is_detected_per_target.get(t_idx, 0)
                 prod_loss *= (1 - a)
                 n_detected += a
+            # ─────────────────────────────────────────────────────────────
+            # 식 (28i): F_kt ≤ epsilon_kt 제약을 lam1 항에 흡수 (길 1)
+            #   기존: lam1 * (F_kt/100)
+            #   변경: lam1 * (F_kt/100 + max(0, F_kt - epsilon_kt)/100)
+            # 새 람다 도입 X. epsilon이 작을수록 (critical zone 근접) F_kt에 대한
+            # 페널티 가중치 자동 증가 → AAI 출력이 의미 있는 학습 신호로 작용.
+            # ─────────────────────────────────────────────────────────────
+            violation = max(0.0, target.F_kt - target.epsilon_kt)
             r_tracking -= target.W_kt * (
-                self.lam1 * (target.F_kt / 100.0) + self.lam2 * prod_loss
+                self.lam1 * (target.F_kt + violation) / 100.0
+                + self.lam2 * prod_loss
             )
             if n_detected == 0:
                 r_untracked -= self.lam5
