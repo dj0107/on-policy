@@ -24,7 +24,7 @@
 ## UAV 물리 파라미터 (UAV class)
   max_speed           = 10.0  [m/s]
   max_energy          = 100,000  [J]
-  altitude (H)        = 80.0  [m]
+  altitude (H)        = 100.0  [m]
   tau_s_ratio         = 0.5   (센싱:통신 시간 비율 = 0.5:0.5)
   p_ut (초기값)       = 1.0   [W]  (AAI: dist≤200m→1W, dist>200m→2W)
                                    ※ 구버전 근거리 0.5W 제거 — H=90m에서 slant≥90m, SNR=90<100 탐지불가
@@ -37,7 +37,7 @@
   sigma (RCS)         = 1.0   [m²]
   N0 (잡음 밀도)      = 1e-14  [W/Hz]
   snr_threshold       = 20 dB  (선형 100)
-  검출 수평 거리 ≈ 52 m   (p_ut=1W, H=90m 조건)
+  검출 수평 거리 ≈ 30 m   (p_ut=1W, H=100m 조건)
 
 ## 통신 모델
   B_b (대역폭)        = 1e6  [Hz]
