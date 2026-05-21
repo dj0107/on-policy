@@ -205,7 +205,7 @@ class UAVTrackingEnv(gym.Env):
         self.sigma_theta_sq_floor = 1e-7
         self._precompute_ekf_matrices()
 
-        self.uavs = [UAV(i, [0, 0], altitude=100.0) for i in range(self.num_uavs)]
+        self.uavs = [UAV(i, [0, 0], altitude=80.0) for i in range(self.num_uavs)]
         self.targets = [Target(i, [0, 0], [0, 0]) for i in range(self.num_targets)]
         self.assignment = {u: 0 for u in range(self.num_uavs)}
 
@@ -258,8 +258,8 @@ class UAVTrackingEnv(gym.Env):
             for i in range(self.num_targets)
         ]
 
-        # 2) UAV를 타겟 근처 센싱 가능 범위(10~25m) 내 랜덤 배치
-        #    수평 25m + 고도 100m → 3D ~103m, SNR >> threshold (탐지 보장)
+        # 2) UAV를 타겟 근처 센싱 가능 범위(10~50m) 내 랜덤 배치
+        #    수평 50m + 고도 80m → 3D ~94m, SNR >> threshold (탐지 보장)
         uavs_per_target = {t: [] for t in range(self.num_targets)}
         for u in range(self.num_uavs):
             uavs_per_target[u % self.num_targets].append(u)
@@ -269,7 +269,7 @@ class UAVTrackingEnv(gym.Env):
             for u_idx in uavs_per_target[t_idx]:
                 for _ in range(30):
                     angle = np.random.uniform(0, 2.0 * math.pi)
-                    radius = np.random.uniform(10.0, 25.0)
+                    radius = np.random.uniform(10.0, 50.0)
                     pos = target.pos + np.array([radius * math.cos(angle),
                                                  radius * math.sin(angle)], dtype=np.float32)
                     pos = np.clip(pos, self.map_min, self.map_max)
@@ -280,7 +280,7 @@ class UAVTrackingEnv(gym.Env):
                 uav_positions[u_idx] = pos
 
         self.uavs = [
-            UAV(i, uav_positions[i].tolist(), altitude=100.0)
+            UAV(i, uav_positions[i].tolist(), altitude=80.0)
             for i in range(self.num_uavs)
         ]
 

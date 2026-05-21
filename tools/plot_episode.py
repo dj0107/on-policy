@@ -88,15 +88,12 @@ def _draw_map_layout(ax, log, env_meta, time_range=None):
     ax.text(bs_pos[0], bs_pos[1] - 35, 'BS', ha='center', va='top',
             fontsize=9, color=BS_COLOR, fontweight='bold')
 
-    # UAV 궤적: 시간에 따라 점점 진해지는 scatter dots
+    # UAV 궤적: 실선
     uav_colors = _make_uav_colors(num_uavs)
     for u in range(num_uavs):
         traj = uav_pos[t0:t1, u, :]   # (T, 2)
-        T_len = len(traj)
-        alphas = np.linspace(0.25, 0.92, T_len)
-        c_arr = np.array([[*uav_colors[u][:3], a] for a in alphas])
-        ax.scatter(traj[:, 0], traj[:, 1], c=c_arr, s=16,
-                   linewidths=0, zorder=3, marker='o')
+        ax.plot(traj[:, 0], traj[:, 1], '-', color=uav_colors[u],
+                linewidth=1.4, alpha=0.75, zorder=3)
         # 끝 마커 (삼각형)
         ax.plot(traj[-1, 0], traj[-1, 1], '^', color=uav_colors[u],
                 markersize=11, markeredgecolor='white', markeredgewidth=1.2,
@@ -134,10 +131,10 @@ def _draw_map_layout(ax, log, env_meta, time_range=None):
 
     # 범례 — axes 바로 위(외부)에 가로 배치
     handles = [
-        Line2D([0], [0], marker='^', color='w', markerfacecolor='#1f5fa8',
-               markersize=10, label='UAV (final)'),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='#1f5fa8',
-               markersize=6, alpha=0.7, label='UAV (start)'),
+        Line2D([0], [0], marker='^', color='#1f5fa8', markerfacecolor='#1f5fa8',
+               markersize=10, linewidth=1.4, label='UAV (final)'),
+        Line2D([0], [0], color='#1f5fa8', linewidth=1.4, alpha=0.75,
+               label='UAV (path)'),
         Line2D([0], [0], color=tgt_colors[0], linewidth=2, label='Target (true)'),
         Line2D([0], [0], color=tgt_colors[0], linewidth=1.3,
                linestyle=':', label='Target (BS estimate)'),
