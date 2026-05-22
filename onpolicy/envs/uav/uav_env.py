@@ -544,8 +544,7 @@ class UAVTrackingEnv(gym.Env):
                 r_sq = dx**2 + dy**2
                 r = math.sqrt(r_sq) if r_sq > 0 else 1e-6
 
-                # BFIM용 H: 참 위치에서 평가 (Fisher information 정의상 올바름)
-                H_true = np.array([
+                H = np.array([
                     [dx/r,    dy/r,    0, 0],
                     [-dy/r_sq, dx/r_sq, 0, 0]
                 ], dtype=np.float32)
@@ -556,7 +555,7 @@ class UAVTrackingEnv(gym.Env):
                                      self.sigma_theta_sq_floor)
                 R_t = np.diag([sigma_r_sq, sigma_theta_sq]).astype(np.float32)
                 R_inv = np.linalg.inv(R_t)
-                target.measurement_info += H_true.T @ R_inv @ H_true
+                target.measurement_info += H.T @ R_inv @ H
 
                 true_meas = np.array([math.sqrt(r_sq), math.atan2(dy, dx)], dtype=np.float32)
                 noise = np.random.multivariate_normal([0, 0], R_t).astype(np.float32)
@@ -564,23 +563,16 @@ class UAVTrackingEnv(gym.Env):
 
                 S_pred = self.F_mat @ target.S_global
                 P_pred = self.F_mat @ target.P_global @ self.F_mat.T + self.Q
+                S_innov = H @ P_pred @ H.T + R_t
+                K = P_pred @ H.T @ np.linalg.inv(S_innov + np.eye(2)*1e-6)
 
-                # EKF용 H: 예측 상태에서 Linearize (표준 EKF)
                 dx_pred = float(S_pred[0]) - float(uav.pos[0])
                 dy_pred = float(S_pred[1]) - float(uav.pos[1])
-                r_sq_pred = max(dx_pred**2 + dy_pred**2, 1e-12)
-                r_pred_val = math.sqrt(r_sq_pred)
-                H_pred = np.array([
-                    [dx_pred/r_pred_val,    dy_pred/r_pred_val,    0, 0],
-                    [-dy_pred/r_sq_pred, dx_pred/r_sq_pred, 0, 0]
-                ], dtype=np.float32)
-
-                S_innov = H_pred @ P_pred @ H_pred.T + R_t
-                K = P_pred @ H_pred.T @ np.linalg.inv(S_innov + np.eye(2)*1e-6)
-
-                pred_meas = np.array([r_pred_val, math.atan2(dy_pred, dx_pred)], dtype=np.float32)
+                dist_sq = dx_pred**2 + dy_pred**2
+                r_pred = math.sqrt(dist_sq) if dist_sq < 1e16 else 1e8
+                pred_meas = np.array([r_pred, math.atan2(dy_pred, dx_pred)], dtype=np.float32)
                 S_local = S_pred + K @ (z_ukt - pred_meas)
-                P_local = (np.eye(4) - K @ H_pred) @ P_pred
+                P_local = (np.eye(4) - K @ H) @ P_pred
                 if np.isnan(S_local).any() or np.isnan(P_local).any():
                     uav.local_estimates[t_idx] = None
                 else:

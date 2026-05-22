@@ -439,12 +439,25 @@ class LLMAAI:
         return {'targets': clean_targets, 'uavs': clean_uavs}
 
     def _apply_output(self, env, output: Dict[str, Any]):
-        """LLM/heuristic output을 env에 주입"""
+        """LLM/heuristic output을 env에 주입 (W_kt는 _apply_dynamic_wkt가 덮어씀)"""
         for k, t_out in enumerate(output['targets']):
             env.targets[k].W_kt = float(t_out['W_kt'])
             env.targets[k].epsilon_kt = float(t_out['epsilon_kt'])
         for u, u_out in enumerate(output['uavs']):
             env.uavs[u].p_ut = float(u_out['p_ut'])
+
+    def _apply_dynamic_wkt(self, env):
+        """W_kt를 매 step d_Z_kt + F_kt urgency 기반으로 동적 계산.
+        LLM throttling 구간에서도 크리티컬존 근접 시 W_kt가 오르도록 보장."""
+        for target in env.targets:
+            if target.d_Z_kt < 100.0:
+                w_base = 1.5
+            elif target.d_Z_kt < 200.0:
+                w_base = 1.0
+            else:
+                w_base = 0.5
+            w_track = 1.5 * min(1.0, target.F_kt / 500.0)
+            target.W_kt = w_base + w_track
 
     def callback(self, env):
         """env.aai_callback에 등록할 함수.
@@ -478,6 +491,7 @@ class LLMAAI:
         if self._last_output is not None and steps_since_last < self.call_every:
             self.stats['n_throttled'] += 1
             self._apply_output(env, self._last_output)
+            self._apply_dynamic_wkt(env)
             return
 
         # 3) Cache lookup
@@ -489,6 +503,7 @@ class LLMAAI:
             self._apply_output(env, output)
             self._last_output = output
             self._last_step = env.time_slot
+            self._apply_dynamic_wkt(env)
             return
 
         # 4) LLM 호출 (provider 있으면)
@@ -517,6 +532,7 @@ class LLMAAI:
         self._last_output = output
         self._last_step = env.time_slot
         self._apply_output(env, output)
+        self._apply_dynamic_wkt(env)
 
 
 # ============================================================================
